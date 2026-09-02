@@ -1,0 +1,3 @@
+# Operação local antes do acesso remoto
+
+O MVP será executado e acessado apenas no computador do Titular, sem exposição à internet, sincronização em nuvem ou envio de dados financeiros a modelos de IA externos, confiando inicialmente na sessão do sistema operacional em vez de exigir desbloqueio próprio. A estrutura preservará limites explícitos de identidade, armazenamento e configuração, mas proteção contra outros usuários locais, criptografia adicional, IA e qualquer acesso remoto dependerão de uma revisão de segurança específica, pois os dados financeiros tornam inadequado transformar conveniência futura em exposição prematura.
