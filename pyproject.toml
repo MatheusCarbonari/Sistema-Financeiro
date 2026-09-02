@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bot-financeiro"
+version = "0.1.0"
+description = "Aplicação local para controle financeiro pessoal."
+requires-python = ">=3.12"
+dependencies = [
+    "alembic",
+    "fastapi",
+    "jinja2",
+    "pydantic-settings",
+    "python-multipart",
+    "sqlalchemy",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx",
+    "pytest",
+    "ruff",
+]
+
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]

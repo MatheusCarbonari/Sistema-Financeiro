@@ -1,0 +1,64 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Coverage and test artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+test-results/
+playwright-report/
+blob-report/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local.toml
+
+# Runtime data containing personal financial information
+/data/
+/backups/
+/exports/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+tmp/
+.cache/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.history/
+.DS_Store
+Thumbs.db
+Desktop.ini
