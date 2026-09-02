@@ -17,6 +17,9 @@ dependencies = [
     "uvicorn",
 ]
 
+[project.scripts]
+bot-financeiro = "bot_financeiro.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "httpx",
@@ -24,11 +27,19 @@ dev = [
     "ruff",
 ]
 
-[tool.setuptools]
-packages = []
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bot_financeiro = [
+    "interface/static/*",
+    "interface/templates/*.html",
+]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

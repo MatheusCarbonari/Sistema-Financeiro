@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="{{ locale }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#102a43">
+    <title>{{ title }} · Bot Financeiro</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/resumo" aria-label="Bot Financeiro — início">
+        <span class="brand-mark" aria-hidden="true">BF</span>
+        <span>Bot Financeiro</span>
+      </a>
+      <span class="local-status">Somente neste computador</span>
+    </header>
+
+    <div class="layout">
+      <nav class="navigation" aria-label="Navegação principal">
+        {% for slug, label, _ in navigation %}
+          <a
+            href="/{{ slug }}"
+            {% if current_page == slug %}aria-current="page"{% endif %}
+          >{{ label }}</a>
+        {% endfor %}
+      </nav>
+
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </body>
+</html>
