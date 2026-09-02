@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +12,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    host: str = "127.0.0.1"
+    host: Literal["127.0.0.1"] = "127.0.0.1"
     port: int = 8000
     locale: str = "pt-BR"
     timezone: str = "America/Sao_Paulo"

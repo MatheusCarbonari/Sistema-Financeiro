@@ -1,6 +1,6 @@
 # Criar shell Web/PWA local
 
-Status: open
+Status: resolved
 Blocked by: 01
 
 ## Objetivo
@@ -29,3 +29,19 @@ Criar a estrutura executável da aplicação Web/PWA local que receberá os flux
 
 ## Comments
 
+- Os seams públicos de TDD foram confirmados antes da implementação: HTTP com
+  `TestClient`, configuração pública, recursos PWA servidos por HTTP e início pelo
+  comando público em loopback.
+- A instalação real da PWA no navegador foi explicitamente adiada para um ticket
+  posterior com `pytest-playwright`; neste ticket foi verificado o contrato público
+  formado por manifesto, service worker, registro e recursos locais.
+
+## Answer
+
+O shell Web/PWA local foi criado com FastAPI, Uvicorn e Jinja2. Ele oferece as seis
+páginas e a navegação previstas, usa `pt-BR` e `America/Sao_Paulo`, funciona com
+recursos locais e recusa configuração de bind diferente de `127.0.0.1`.
+
+O manifesto, o service worker e seu registro fornecem o contrato mínimo de PWA sem
+adicionar `pytest-playwright`. Nenhuma regra financeira ou persistência de domínio
+foi implementada.

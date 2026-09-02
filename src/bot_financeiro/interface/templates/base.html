@@ -21,11 +21,11 @@
 
     <div class="layout">
       <nav class="navigation" aria-label="Navegação principal">
-        {% for slug, label, _ in navigation %}
+        {% for page in navigation %}
           <a
-            href="/{{ slug }}"
-            {% if current_page == slug %}aria-current="page"{% endif %}
-          >{{ label }}</a>
+            href="/{{ page.slug }}"
+            {% if current_page == page.slug %}aria-current="page"{% endif %}
+          >{{ page.title }}</a>
         {% endfor %}
       </nav>
 

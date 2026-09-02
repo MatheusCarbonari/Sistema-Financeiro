@@ -78,3 +78,21 @@ def test_shell_restricts_browser_dependencies_to_its_own_origin() -> None:
             "style-src 'self'; "
             "worker-src 'self'"
         )
+
+
+def test_page_content_cannot_be_changed_through_query_parameters() -> None:
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/resumo",
+        params={
+            "page_slug": "externo",
+            "page_title": "Conteúdo externo",
+            "page_description": "Descrição externa",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "<h1>Resumo</h1>" in response.text
+    assert "Conteúdo externo" not in response.text
+    assert "Descrição externa" not in response.text

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools==80.9.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,13 +8,13 @@ version = "0.1.0"
 description = "Aplicação local para controle financeiro pessoal."
 requires-python = ">=3.12"
 dependencies = [
-    "alembic",
-    "fastapi",
-    "jinja2",
-    "pydantic-settings",
-    "python-multipart",
-    "sqlalchemy",
-    "uvicorn",
+    "alembic==1.19.1",
+    "fastapi==0.141.1",
+    "jinja2==3.1.6",
+    "pydantic-settings==2.15.0",
+    "python-multipart==0.0.32",
+    "sqlalchemy==2.0.52",
+    "uvicorn==0.52.4",
 ]
 
 [project.scripts]
@@ -22,9 +22,9 @@ bot-financeiro = "bot_financeiro.__main__:main"
 
 [project.optional-dependencies]
 dev = [
-    "httpx",
-    "pytest",
-    "ruff",
+    "httpx==0.28.1",
+    "pytest==9.1.1",
+    "ruff==0.16.5",
 ]
 
 [tool.setuptools.packages.find]
@@ -37,7 +37,7 @@ bot_financeiro = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra -p no:cacheprovider"
 pythonpath = ["src"]
 testpaths = ["tests"]
 

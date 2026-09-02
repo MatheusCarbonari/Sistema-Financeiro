@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -11,13 +12,21 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = PACKAGE_DIR / "static"
 TEMPLATES_DIR = PACKAGE_DIR / "templates"
 
+
+@dataclass(frozen=True, slots=True)
+class Page:
+    slug: str
+    title: str
+    description: str
+
+
 PAGES = (
-    ("resumo", "Resumo", "Sua visão financeira em um só lugar."),
-    ("lancamentos", "Lançamentos", "Registre e consulte suas movimentações."),
-    ("contas", "Contas", "Organize suas contas de recursos."),
-    ("cartoes", "Cartões", "Acompanhe seus cartões e faturas."),
-    ("planejamento", "Planejamento", "Veja previsões e compromissos futuros."),
-    ("configuracoes", "Configurações", "Ajuste as preferências locais do aplicativo."),
+    Page("resumo", "Resumo", "Sua visão financeira em um só lugar."),
+    Page("lancamentos", "Lançamentos", "Registre e consulte suas movimentações."),
+    Page("contas", "Contas", "Organize suas contas de recursos."),
+    Page("cartoes", "Cartões", "Acompanhe seus cartões e faturas."),
+    Page("planejamento", "Planejamento", "Veja previsões e compromissos futuros."),
+    Page("configuracoes", "Configurações", "Ajuste as preferências locais do aplicativo."),
 )
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
@@ -60,29 +69,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    for slug, title, description in PAGES:
-
-        def render_page(
-            request: Request,
-            page_slug: str = slug,
-            page_title: str = title,
-            page_description: str = description,
-        ):
+    def page_handler(page: Page):
+        def render_page(request: Request):
             response = templates.TemplateResponse(
                 request=request,
                 name="page.html",
                 context={
-                    "current_page": page_slug,
-                    "description": page_description,
+                    "current_page": page.slug,
+                    "description": page.description,
                     "locale": app_settings.locale,
                     "navigation": PAGES,
-                    "title": page_title,
+                    "title": page.title,
                 },
             )
             response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
             return response
 
-        app.add_api_route(f"/{slug}", render_page, methods=["GET"], name=slug)
+        return render_page
+
+    for page in PAGES:
+        app.add_api_route(
+            f"/{page.slug}",
+            page_handler(page),
+            methods=["GET"],
+            name=page.slug,
+        )
 
     return app
 
