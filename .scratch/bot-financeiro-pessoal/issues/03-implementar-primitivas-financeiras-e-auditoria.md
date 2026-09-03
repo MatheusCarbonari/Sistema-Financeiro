@@ -1,6 +1,6 @@
 # Implementar primitivas financeiras e auditoria
 
-Status: open
+Status: resolved
 Blocked by: 01
 
 ## Objetivo
@@ -31,3 +31,23 @@ Implementar os conceitos fundamentais compartilhados por todas as operações fi
 
 ## Comments
 
+- Seams públicos confirmados antes do TDD: `Money`, `RecordMetadata`,
+  `AuditTrail` e `SqlAlchemyUnitOfWork`.
+- `AuditTrail` foi mantido como fundação append-only. Os efeitos financeiros de
+  Correções e Cancelamentos continuam reservados ao Ticket 11.
+- Baseline do code review: `bc9d3cc`.
+
+## Answer
+
+Foram implementados o Valor monetário exato com moeda obrigatória, a precisão de
+centavos para BRL, a proteção contra aritmética e comparação entre moedas distintas
+e a divisão que preserva o total com resíduos nos primeiros itens.
+
+Os metadados de registro mantêm identidade, origem, Data efetiva e Momento do
+registro com fuso como informações distintas. A trilha de auditoria é imutável e
+append-only, oferecendo somente a base para registrar Correções e Cancelamentos
+sem antecipar seus efeitos.
+
+A unidade de trabalho SQLAlchemy usa sessões curtas, commit explícito e rollback
+integral em caso de falha. A atomicidade foi verificada em SQLite real sem criar
+Contas de recursos, Cartões de crédito ou Movimentações realizadas.
