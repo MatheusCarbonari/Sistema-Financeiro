@@ -292,3 +292,41 @@ def test_account_snapshot_cannot_diverge_from_its_history() -> None:
 
     with pytest.raises(ValueError, match="history"):
         replace(account, balance=Money("11.00", "BRL"))
+
+
+@pytest.mark.parametrize(
+    ("account_type", "invalid_policy"),
+    [
+        (AccountType.WALLET, True),
+        (AccountType.CHECKING, False),
+        (AccountType.DIGITAL, False),
+        (AccountType.SAVINGS, False),
+    ],
+)
+def test_non_custom_account_policy_cannot_be_overridden(
+    account_type: AccountType,
+    invalid_policy: bool,
+) -> None:
+    account = ResourceAccount.open(
+        name="Conta",
+        account_type=account_type,
+        currency="BRL",
+        initial_balance=Money("0.00", "BRL"),
+        metadata=metadata("fd8928c6-7dc6-4fbc-904e-df6946ca6313"),
+    )
+
+    with pytest.raises(ValueError, match="negative balance policy"):
+        replace(account, allows_negative_balance=invalid_policy)
+
+
+def test_account_identity_is_bound_to_its_initial_history_entry() -> None:
+    account = ResourceAccount.open(
+        name="Conta",
+        account_type=AccountType.CHECKING,
+        currency="BRL",
+        initial_balance=Money("0.00", "BRL"),
+        metadata=metadata("434ca18e-c438-4d75-b431-430354cf7ca1"),
+    )
+
+    with pytest.raises(ValueError, match="identity"):
+        replace(account, account_id=UUID("ba7a44d0-6c9f-4c8e-bfa8-680df367d040"))

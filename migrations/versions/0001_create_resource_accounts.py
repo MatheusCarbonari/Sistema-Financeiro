@@ -40,8 +40,28 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("account_id", "sequence"),
     )
+    op.execute(
+        """
+        CREATE TRIGGER account_history_entries_no_update
+        BEFORE UPDATE ON account_history_entries
+        BEGIN
+            SELECT RAISE(ABORT, 'account history is append-only');
+        END
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER account_history_entries_no_delete
+        BEFORE DELETE ON account_history_entries
+        BEGIN
+            SELECT RAISE(ABORT, 'account history is append-only');
+        END
+        """
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER account_history_entries_no_delete")
+    op.execute("DROP TRIGGER account_history_entries_no_update")
     op.drop_table("account_history_entries")
     op.drop_table("resource_accounts")

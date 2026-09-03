@@ -64,6 +64,20 @@ class ResourceAccount:
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("account name is required")
+        if not isinstance(self.account_type, AccountType):
+            raise ValueError("account type is invalid")
+        if not isinstance(self.status, AccountStatus):
+            raise ValueError("account status is invalid")
+        if not isinstance(self.allows_negative_balance, bool):
+            raise ValueError("negative balance policy must be boolean")
+        if self.account_type is not AccountType.CUSTOM:
+            expected_policy = self.account_type in {
+                AccountType.CHECKING,
+                AccountType.DIGITAL,
+                AccountType.SAVINGS,
+            }
+            if self.allows_negative_balance is not expected_policy:
+                raise ValueError("negative balance policy does not match account type")
         if self.balance.currency != self.currency:
             raise CurrencyMismatchError("account balance must use the account currency")
         if self.balance.amount < 0 and not self.allows_negative_balance:
@@ -74,6 +88,8 @@ class ResourceAccount:
             raise ValueError("account history must be a non-empty immutable tuple")
         if self.history[0].kind is not AccountHistoryEntryKind.INITIAL_BALANCE:
             raise ValueError("account history must begin with the initial balance")
+        if self.account_id != self.history[0].metadata.record_id:
+            raise ValueError("account identity must match its initial history entry")
 
         previous_balance = None
         seen_record_ids: set[UUID] = set()

@@ -154,3 +154,30 @@ def test_database_prevents_deleting_an_account_that_has_history() -> None:
             connection.exec_driver_sql(
                 "DELETE FROM resource_accounts WHERE id = ?", (str(account.account_id),)
             )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE account_history_entries SET reason = 'adulterado'",
+        "DELETE FROM account_history_entries",
+    ],
+)
+def test_database_rejects_changes_to_existing_history(statement: str) -> None:
+    engine = migrated_database()
+    unit_of_work = SqlAlchemyUnitOfWork(sessionmaker(bind=engine))
+    account = ResourceAccount.open(
+        name="Carteira",
+        account_type=AccountType.WALLET,
+        currency="BRL",
+        initial_balance=Money("0.00", "BRL"),
+        metadata=metadata("4ee07fbc-d925-4827-8232-0cc035df795f", day=1),
+    )
+    with unit_of_work:
+        repository = SqlAlchemyResourceAccountRepository(unit_of_work.session)
+        repository.add(account)
+        unit_of_work.commit()
+
+    with pytest.raises(IntegrityError, match="account history is append-only"):
+        with engine.begin() as connection:
+            connection.exec_driver_sql(statement)
