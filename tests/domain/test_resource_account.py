@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from uuid import UUID
 
@@ -278,3 +279,16 @@ def test_archived_account_rejects_adjustments_and_can_be_reactivated() -> None:
     assert reactivated.status is AccountStatus.ACTIVE
     assert reactivated.history == archived.history
     assert adjusted.balance == Money("1.00", "BRL")
+
+
+def test_account_snapshot_cannot_diverge_from_its_history() -> None:
+    account = ResourceAccount.open(
+        name="Conta principal",
+        account_type=AccountType.CHECKING,
+        currency="BRL",
+        initial_balance=Money("10.00", "BRL"),
+        metadata=metadata("3af8c31a-b616-4192-b33f-1f6ab42517c1"),
+    )
+
+    with pytest.raises(ValueError, match="history"):
+        replace(account, balance=Money("11.00", "BRL"))

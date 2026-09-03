@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("recorded_at", sa.String(), nullable=False),
         sa.Column("origin", sa.String(length=16), nullable=False),
         sa.Column("reason", sa.String(), nullable=True),
-        sa.ForeignKeyConstraint(["account_id"], ["resource_accounts.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["account_id"], ["resource_accounts.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("account_id", "sequence"),
     )

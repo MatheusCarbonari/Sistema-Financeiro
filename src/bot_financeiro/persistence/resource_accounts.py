@@ -51,7 +51,7 @@ account_history_entries = Table(
     Column(
         "account_id",
         String(36),
-        ForeignKey("resource_accounts.id", ondelete="CASCADE"),
+        ForeignKey("resource_accounts.id", ondelete="RESTRICT"),
         nullable=False,
     ),
     Column("sequence", Integer, nullable=False),
@@ -106,21 +106,28 @@ class SqlAlchemyResourceAccountRepository:
         )
 
     def save(self, account: ResourceAccount) -> None:
-        result = self._session.execute(
+        persisted = self.get(account.account_id)
+        if persisted is None:
+            raise LookupError(f"resource account {account.account_id} does not exist")
+        persisted_history_size = len(persisted.history)
+        if (
+            len(account.history) < persisted_history_size
+            or account.history[:persisted_history_size] != persisted.history
+        ):
+            raise ValueError("persisted history is immutable and can only be appended")
+
+        self._session.execute(
             update(resource_accounts)
             .where(resource_accounts.c.id == str(account.account_id))
             .values(self._account_values(account))
         )
-        if result.rowcount != 1:
-            raise LookupError(f"resource account {account.account_id} does not exist")
-
-        persisted_count = self._session.scalar(
+        last_persisted_sequence = self._session.scalar(
             select(account_history_entries.c.sequence)
             .where(account_history_entries.c.account_id == str(account.account_id))
             .order_by(account_history_entries.c.sequence.desc())
             .limit(1)
         )
-        start_at = 0 if persisted_count is None else persisted_count + 1
+        start_at = 0 if last_persisted_sequence is None else last_persisted_sequence + 1
         self._append_history(account, start_at=start_at)
 
     @staticmethod

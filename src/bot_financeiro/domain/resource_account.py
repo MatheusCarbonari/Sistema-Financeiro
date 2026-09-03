@@ -32,6 +32,15 @@ class AccountHistoryEntry:
     metadata: RecordMetadata
     reason: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.difference.currency != self.balance.currency:
+            raise CurrencyMismatchError("history values must use the same currency")
+        if (
+            self.kind is AccountHistoryEntryKind.BALANCE_ADJUSTMENT
+            and not (self.reason or "").strip()
+        ):
+            raise ValueError("balance adjustment history requires a reason")
+
     @property
     def is_income(self) -> bool:
         return False
@@ -51,6 +60,42 @@ class ResourceAccount:
     status: AccountStatus
     allows_negative_balance: bool
     history: tuple[AccountHistoryEntry, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("account name is required")
+        if self.balance.currency != self.currency:
+            raise CurrencyMismatchError("account balance must use the account currency")
+        if self.balance.amount < 0 and not self.allows_negative_balance:
+            raise ValueError("negative balance is not allowed for this account")
+        if self.status is AccountStatus.ARCHIVED and self.balance.amount != 0:
+            raise ValueError("archived account must have zero balance")
+        if not isinstance(self.history, tuple) or not self.history:
+            raise ValueError("account history must be a non-empty immutable tuple")
+        if self.history[0].kind is not AccountHistoryEntryKind.INITIAL_BALANCE:
+            raise ValueError("account history must begin with the initial balance")
+
+        previous_balance = None
+        seen_record_ids: set[UUID] = set()
+        for index, entry in enumerate(self.history):
+            if entry.metadata.record_id in seen_record_ids:
+                raise ValueError("account history record identities must be unique")
+            seen_record_ids.add(entry.metadata.record_id)
+            if entry.balance.currency != self.currency:
+                raise CurrencyMismatchError("account history must use the account currency")
+            if index == 0:
+                if entry.difference.amount != entry.balance.amount:
+                    raise ValueError("initial history difference must equal its balance")
+            else:
+                if entry.kind is AccountHistoryEntryKind.INITIAL_BALANCE:
+                    raise ValueError("initial balance can appear only once in account history")
+                expected_difference = entry.balance.amount - previous_balance.amount
+                if entry.difference.amount != expected_difference:
+                    raise ValueError("account history contains an inconsistent difference")
+            previous_balance = entry.balance
+
+        if self.history[-1].balance.amount != self.balance.amount:
+            raise ValueError("account balance must match the latest history entry")
 
     def adjust_balance(
         self,
