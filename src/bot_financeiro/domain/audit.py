@@ -5,6 +5,11 @@ from typing import Self
 from uuid import UUID, uuid4
 
 
+def _require_timezone(value: datetime, field_name: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field_name} requires timezone information")
+
+
 class RecordOrigin(StrEnum):
     MANUAL = "manual"
 
@@ -23,8 +28,7 @@ class RecordMetadata:
     record_id: UUID = field(default_factory=uuid4)
 
     def __post_init__(self) -> None:
-        if self.recorded_at.tzinfo is None or self.recorded_at.utcoffset() is None:
-            raise ValueError("recorded_at requires timezone information")
+        _require_timezone(self.recorded_at, "recorded_at")
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,8 +39,7 @@ class AuditEntry:
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:
-            raise ValueError("occurred_at requires timezone information")
+        _require_timezone(self.occurred_at, "occurred_at")
         if self.action is not AuditAction.REGISTERED and not (self.reason or "").strip():
             raise ValueError("corrections and cancellations require a reason")
 

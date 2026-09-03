@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from functools import total_ordering
 
 BRL_CENT = Decimal("0.01")
 
@@ -8,7 +9,8 @@ class CurrencyMismatchError(ValueError):
     """A operação exige Valores monetários na mesma moeda."""
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@total_ordering
+@dataclass(frozen=True, slots=True, init=False, eq=False)
 class Money:
     amount: Decimal
     currency: str
@@ -35,11 +37,23 @@ class Money:
     def __add__(self, other: object) -> "Money":
         if not isinstance(other, Money):
             return NotImplemented
-        if self.currency != other.currency:
-            raise CurrencyMismatchError(
-                f"cannot add {self.currency} and {other.currency} without conversion"
-            )
+        self._require_matching_currency(other)
         return Money(self.amount + other.amount, self.currency)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Money):
+            return NotImplemented
+        self._require_matching_currency(other)
+        return self.amount == other.amount
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Money):
+            return NotImplemented
+        self._require_matching_currency(other)
+        return self.amount < other.amount
+
+    def __hash__(self) -> int:
+        return hash((self.amount, self.currency))
 
     def split_equally(self, number_of_parts: int) -> tuple["Money", ...]:
         if number_of_parts < 1:
@@ -58,3 +72,9 @@ class Money:
             )
             for index in range(number_of_parts)
         )
+
+    def _require_matching_currency(self, other: "Money") -> None:
+        if self.currency != other.currency:
+            raise CurrencyMismatchError(
+                f"cannot operate on {self.currency} and {other.currency} without conversion"
+            )

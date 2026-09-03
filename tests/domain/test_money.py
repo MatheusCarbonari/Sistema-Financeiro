@@ -1,4 +1,6 @@
+from collections.abc import Callable
 from decimal import Decimal
+from operator import eq, lt
 
 import pytest
 
@@ -30,6 +32,14 @@ def test_money_rejects_float_amounts() -> None:
 def test_money_does_not_add_different_currencies_implicitly() -> None:
     with pytest.raises(CurrencyMismatchError):
         Money("10.00", "BRL") + Money("2.00", "USD")
+
+
+@pytest.mark.parametrize("compare", [eq, lt])
+def test_money_does_not_compare_different_currencies_implicitly(
+    compare: Callable[[Money, Money], bool],
+) -> None:
+    with pytest.raises(CurrencyMismatchError):
+        compare(Money("10.00", "BRL"), Money("10.00", "USD"))
 
 
 def test_equal_split_preserves_total_and_assigns_residual_cents_first() -> None:
