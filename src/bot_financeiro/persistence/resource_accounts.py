@@ -7,7 +7,6 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Integer,
-    MetaData,
     String,
     Table,
     UniqueConstraint,
@@ -29,8 +28,7 @@ from bot_financeiro.persistence.money import (
     money_from_minor_units,
     money_to_minor_units,
 )
-
-metadata = MetaData()
+from bot_financeiro.persistence.schema import metadata
 
 resource_accounts = Table(
     "resource_accounts",
