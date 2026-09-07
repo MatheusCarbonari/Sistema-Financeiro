@@ -7,6 +7,7 @@ import pytest
 from bot_financeiro.domain.audit import RecordMetadata, RecordOrigin
 from bot_financeiro.domain.money import CurrencyMismatchError, Money
 from bot_financeiro.domain.resource_account import (
+    AccountHistoryEntry,
     AccountHistoryEntryKind,
     AccountStatus,
     AccountType,
@@ -330,3 +331,26 @@ def test_account_identity_is_bound_to_its_initial_history_entry() -> None:
 
     with pytest.raises(ValueError, match="identity"):
         replace(account, account_id=UUID("ba7a44d0-6c9f-4c8e-bfa8-680df367d040"))
+
+
+@pytest.mark.parametrize(
+    ("kind", "difference"),
+    [
+        (AccountHistoryEntryKind.INCOME, Money("-1.00", "BRL")),
+        (AccountHistoryEntryKind.TRANSFER_IN, Money("-1.00", "BRL")),
+        (AccountHistoryEntryKind.CASH_EXPENSE, Money("1.00", "BRL")),
+        (AccountHistoryEntryKind.TRANSFER_OUT, Money("1.00", "BRL")),
+    ],
+)
+def test_realized_account_history_requires_a_difference_in_its_direction(
+    kind: AccountHistoryEntryKind,
+    difference: Money,
+) -> None:
+    with pytest.raises(ValueError, match="direction"):
+        AccountHistoryEntry(
+            kind=kind,
+            difference=difference,
+            balance=Money("10.00", "BRL"),
+            metadata=metadata("40cf5c38-05aa-4368-9cdd-a98fa6420286"),
+            movement_id=UUID("a2a3a073-85f3-45ba-bf29-49399113dfe0"),
+        )

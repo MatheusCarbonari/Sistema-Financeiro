@@ -61,6 +61,12 @@ account_history_entries = Table(
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
     Column("reason", String, nullable=True),
+    Column(
+        "movement_id",
+        String(36),
+        ForeignKey("financial_movements.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
     UniqueConstraint("account_id", "sequence"),
 )
 
@@ -154,6 +160,7 @@ class SqlAlchemyResourceAccountRepository:
                 "recorded_at": entry.metadata.recorded_at.isoformat(),
                 "origin": entry.metadata.origin.value,
                 "reason": entry.reason,
+                "movement_id": None if entry.movement_id is None else str(entry.movement_id),
             }
             for sequence, entry in enumerate(account.history)
             if sequence >= start_at
@@ -174,4 +181,5 @@ class SqlAlchemyResourceAccountRepository:
                 record_id=UUID(row["id"]),
             ),
             reason=row["reason"],
+            movement_id=None if row["movement_id"] is None else UUID(row["movement_id"]),
         )

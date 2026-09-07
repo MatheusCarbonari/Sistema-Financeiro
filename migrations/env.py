@@ -2,6 +2,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 import bot_financeiro.persistence.categories  # noqa: F401
+import bot_financeiro.persistence.financial_operations  # noqa: F401
 import bot_financeiro.persistence.resource_accounts  # noqa: F401
 from bot_financeiro.persistence.schema import metadata
 
