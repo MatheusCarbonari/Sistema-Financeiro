@@ -172,4 +172,31 @@ class Transfer:
         return transfer, updated_source, updated_destination
 
 
-FinancialMovement = Income | CashExpense | Transfer
+@dataclass(frozen=True, slots=True)
+class BillPayment:
+    payable_id: UUID
+    account_id: UUID
+    amount: Money
+    metadata: RecordMetadata
+
+    def __post_init__(self) -> None:
+        _require_positive(self.amount)
+
+    @property
+    def movement_id(self) -> UUID:
+        return self.metadata.record_id
+
+    @property
+    def event_id(self) -> UUID:
+        return self.movement_id
+
+    @property
+    def is_income(self) -> bool:
+        return False
+
+    @property
+    def is_expense(self) -> bool:
+        return False
+
+
+FinancialMovement = Income | CashExpense | Transfer | BillPayment

@@ -17,7 +17,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session, sessionmaker
 
 from bot_financeiro.domain.audit import RecordMetadata, RecordOrigin
-from bot_financeiro.domain.movements import CashExpense, FinancialMovement, Income, Transfer
+from bot_financeiro.domain.movements import (
+    BillPayment,
+    CashExpense,
+    FinancialMovement,
+    Income,
+    Transfer,
+)
 from bot_financeiro.persistence.categories import (
     SqlAlchemyAllocationRepository,
     SqlAlchemyFinancialCategoryRepository,
@@ -45,6 +51,7 @@ financial_movements = Table(
     ),
     Column("allocation_id", String(36), ForeignKey(allocations.c.id), nullable=True, unique=True),
     Column("related_transfer_id", String(36), ForeignKey("financial_movements.id"), nullable=True),
+    Column("payable_id", String(36), ForeignKey("payables.id"), nullable=True),
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
@@ -53,14 +60,20 @@ financial_movements = Table(
         """
         (kind = 'income' AND account_id IS NOT NULL AND allocation_id IS NOT NULL
             AND source_account_id IS NULL AND destination_account_id IS NULL
-            AND related_transfer_id IS NULL)
+            AND related_transfer_id IS NULL AND payable_id IS NULL)
         OR
         (kind = 'cash_expense' AND account_id IS NOT NULL AND allocation_id IS NOT NULL
-            AND source_account_id IS NULL AND destination_account_id IS NULL)
+            AND source_account_id IS NULL AND destination_account_id IS NULL
+            AND payable_id IS NULL)
         OR
         (kind = 'transfer' AND account_id IS NULL AND allocation_id IS NULL
             AND source_account_id IS NOT NULL AND destination_account_id IS NOT NULL
-            AND source_account_id <> destination_account_id AND related_transfer_id IS NULL)
+            AND source_account_id <> destination_account_id AND related_transfer_id IS NULL
+            AND payable_id IS NULL)
+        OR
+        (kind = 'bill_payment' AND account_id IS NOT NULL AND payable_id IS NOT NULL
+            AND allocation_id IS NULL AND source_account_id IS NULL
+            AND destination_account_id IS NULL AND related_transfer_id IS NULL)
         """,
         name="ck_financial_movement_shape",
     ),
@@ -84,11 +97,15 @@ class SqlAlchemyFinancialMovementRepository:
             "destination_account_id": None,
             "allocation_id": None,
             "related_transfer_id": None,
+            "payable_id": None,
             "effective_date": movement.metadata.effective_date,
             "recorded_at": movement.metadata.recorded_at.isoformat(),
             "origin": movement.metadata.origin.value,
         }
-        if isinstance(movement, Transfer):
+        if isinstance(movement, BillPayment):
+            values["account_id"] = str(movement.account_id)
+            values["payable_id"] = str(movement.payable_id)
+        elif isinstance(movement, Transfer):
             values["source_account_id"] = str(movement.source_account_id)
             values["destination_account_id"] = str(movement.destination_account_id)
         else:
@@ -126,6 +143,13 @@ class SqlAlchemyFinancialMovementRepository:
             record_id=UUID(row["id"]),
         )
         amount = money_from_minor_units(row["amount_minor_units"], row["currency"])
+        if row["kind"] == "bill_payment":
+            return BillPayment(
+                payable_id=UUID(row["payable_id"]),
+                account_id=UUID(row["account_id"]),
+                amount=amount,
+                metadata=movement_metadata,
+            )
         if row["kind"] == "transfer":
             return Transfer(
                 source_account_id=UUID(row["source_account_id"]),
@@ -166,6 +190,8 @@ class SqlAlchemyFinancialMovementRepository:
 
     @staticmethod
     def _kind(movement: FinancialMovement) -> str:
+        if isinstance(movement, BillPayment):
+            return "bill_payment"
         if isinstance(movement, Income):
             return "income"
         if isinstance(movement, CashExpense):
