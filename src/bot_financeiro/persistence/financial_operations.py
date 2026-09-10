@@ -22,6 +22,7 @@ from bot_financeiro.domain.movements import (
     CashExpense,
     FinancialMovement,
     Income,
+    InvoicePayment,
     Transfer,
 )
 from bot_financeiro.persistence.categories import (
@@ -52,6 +53,9 @@ financial_movements = Table(
     Column("allocation_id", String(36), ForeignKey(allocations.c.id), nullable=True, unique=True),
     Column("related_transfer_id", String(36), ForeignKey("financial_movements.id"), nullable=True),
     Column("payable_id", String(36), ForeignKey("payables.id"), nullable=True),
+    Column("card_id", String(36), ForeignKey("credit_cards.id"), nullable=True),
+    Column("invoice_closing_date", Date, nullable=True),
+    Column("applied_amount_minor_units", Integer, nullable=True),
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
@@ -60,20 +64,35 @@ financial_movements = Table(
         """
         (kind = 'income' AND account_id IS NOT NULL AND allocation_id IS NOT NULL
             AND source_account_id IS NULL AND destination_account_id IS NULL
-            AND related_transfer_id IS NULL AND payable_id IS NULL)
+            AND related_transfer_id IS NULL AND payable_id IS NULL
+            AND card_id IS NULL AND invoice_closing_date IS NULL
+            AND applied_amount_minor_units IS NULL)
         OR
         (kind = 'cash_expense' AND account_id IS NOT NULL AND allocation_id IS NOT NULL
             AND source_account_id IS NULL AND destination_account_id IS NULL
-            AND payable_id IS NULL)
+            AND payable_id IS NULL AND card_id IS NULL
+            AND invoice_closing_date IS NULL AND applied_amount_minor_units IS NULL)
         OR
         (kind = 'transfer' AND account_id IS NULL AND allocation_id IS NULL
             AND source_account_id IS NOT NULL AND destination_account_id IS NOT NULL
             AND source_account_id <> destination_account_id AND related_transfer_id IS NULL
-            AND payable_id IS NULL)
+            AND payable_id IS NULL AND card_id IS NULL
+            AND invoice_closing_date IS NULL AND applied_amount_minor_units IS NULL)
         OR
         (kind = 'bill_payment' AND account_id IS NOT NULL AND payable_id IS NOT NULL
             AND allocation_id IS NULL AND source_account_id IS NULL
-            AND destination_account_id IS NULL AND related_transfer_id IS NULL)
+            AND destination_account_id IS NULL AND related_transfer_id IS NULL
+            AND card_id IS NULL AND invoice_closing_date IS NULL
+            AND applied_amount_minor_units IS NULL)
+        OR
+        (kind = 'invoice_payment' AND account_id IS NOT NULL AND card_id IS NOT NULL
+            AND invoice_closing_date IS NOT NULL
+            AND applied_amount_minor_units IS NOT NULL
+            AND applied_amount_minor_units >= 0
+            AND applied_amount_minor_units <= amount_minor_units
+            AND allocation_id IS NULL AND source_account_id IS NULL
+            AND destination_account_id IS NULL AND related_transfer_id IS NULL
+            AND payable_id IS NULL)
         """,
         name="ck_financial_movement_shape",
     ),
@@ -98,11 +117,21 @@ class SqlAlchemyFinancialMovementRepository:
             "allocation_id": None,
             "related_transfer_id": None,
             "payable_id": None,
+            "card_id": None,
+            "invoice_closing_date": None,
+            "applied_amount_minor_units": None,
             "effective_date": movement.metadata.effective_date,
             "recorded_at": movement.metadata.recorded_at.isoformat(),
             "origin": movement.metadata.origin.value,
         }
-        if isinstance(movement, BillPayment):
+        if isinstance(movement, InvoicePayment):
+            values["account_id"] = str(movement.account_id)
+            values["card_id"] = str(movement.card_id)
+            values["invoice_closing_date"] = movement.invoice_closing_date
+            values["applied_amount_minor_units"] = money_to_minor_units(
+                movement.applied_amount
+            )
+        elif isinstance(movement, BillPayment):
             values["account_id"] = str(movement.account_id)
             values["payable_id"] = str(movement.payable_id)
         elif isinstance(movement, Transfer):
@@ -143,6 +172,17 @@ class SqlAlchemyFinancialMovementRepository:
             record_id=UUID(row["id"]),
         )
         amount = money_from_minor_units(row["amount_minor_units"], row["currency"])
+        if row["kind"] == "invoice_payment":
+            return InvoicePayment(
+                card_id=UUID(row["card_id"]),
+                invoice_closing_date=row["invoice_closing_date"],
+                account_id=UUID(row["account_id"]),
+                amount=amount,
+                applied_amount=money_from_minor_units(
+                    row["applied_amount_minor_units"], row["currency"]
+                ),
+                metadata=movement_metadata,
+            )
         if row["kind"] == "bill_payment":
             return BillPayment(
                 payable_id=UUID(row["payable_id"]),
@@ -190,6 +230,8 @@ class SqlAlchemyFinancialMovementRepository:
 
     @staticmethod
     def _kind(movement: FinancialMovement) -> str:
+        if isinstance(movement, InvoicePayment):
+            return "invoice_payment"
         if isinstance(movement, BillPayment):
             return "bill_payment"
         if isinstance(movement, Income):

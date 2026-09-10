@@ -27,6 +27,7 @@ class AccountHistoryEntryKind(StrEnum):
     TRANSFER_IN = "transfer_in"
     TRANSFER_OUT = "transfer_out"
     BILL_PAYMENT = "bill_payment"
+    INVOICE_PAYMENT = "invoice_payment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,7 @@ class AccountHistoryEntry:
             AccountHistoryEntryKind.TRANSFER_IN,
             AccountHistoryEntryKind.TRANSFER_OUT,
             AccountHistoryEntryKind.BILL_PAYMENT,
+            AccountHistoryEntryKind.INVOICE_PAYMENT,
         }
         if self.kind in realized_kinds and self.movement_id is None:
             raise ValueError("realized account history requires a movement reference")
@@ -65,6 +67,7 @@ class AccountHistoryEntry:
             AccountHistoryEntryKind.CASH_EXPENSE,
             AccountHistoryEntryKind.TRANSFER_OUT,
             AccountHistoryEntryKind.BILL_PAYMENT,
+            AccountHistoryEntryKind.INVOICE_PAYMENT,
         }
         if self.kind in incoming_kinds and self.difference.amount <= 0:
             raise ValueError("account history difference conflicts with movement direction")
@@ -203,6 +206,7 @@ class ResourceAccount:
             AccountHistoryEntryKind.TRANSFER_IN,
             AccountHistoryEntryKind.TRANSFER_OUT,
             AccountHistoryEntryKind.BILL_PAYMENT,
+            AccountHistoryEntryKind.INVOICE_PAYMENT,
         }:
             raise ValueError("kind is not a realized account movement")
         if self.status is AccountStatus.ARCHIVED:

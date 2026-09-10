@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from uuid import UUID
 
 from bot_financeiro.domain.audit import RecordMetadata
@@ -199,4 +200,39 @@ class BillPayment:
         return False
 
 
-FinancialMovement = Income | CashExpense | Transfer | BillPayment
+@dataclass(frozen=True, slots=True)
+class InvoicePayment:
+    card_id: UUID
+    invoice_closing_date: date
+    account_id: UUID
+    amount: Money
+    applied_amount: Money
+    metadata: RecordMetadata
+
+    def __post_init__(self) -> None:
+        _require_positive(self.amount)
+        if self.applied_amount.amount < 0:
+            raise ValueError("invoice payment applied amount cannot be negative")
+        if self.applied_amount.currency != self.amount.currency:
+            raise CurrencyMismatchError("invoice payment values must use the same currency")
+        if self.applied_amount > self.amount:
+            raise ValueError("invoice payment applied amount cannot exceed cash payment")
+
+    @property
+    def movement_id(self) -> UUID:
+        return self.metadata.record_id
+
+    @property
+    def event_id(self) -> UUID:
+        return self.movement_id
+
+    @property
+    def is_income(self) -> bool:
+        return False
+
+    @property
+    def is_expense(self) -> bool:
+        return False
+
+
+FinancialMovement = Income | CashExpense | Transfer | BillPayment | InvoicePayment
