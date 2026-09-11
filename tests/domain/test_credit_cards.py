@@ -10,7 +10,14 @@ from bot_financeiro.domain.categories import (
     CategoryCatalog,
     FinancialNature,
 )
-from bot_financeiro.domain.credit_cards import CardPurchase, CreditCard, InvoiceStatus
+from bot_financeiro.domain.credit_cards import (
+    CardCashFlow,
+    CardPurchase,
+    CreditCard,
+    InstallmentPurchase,
+    InstallmentPurchaseCorrected,
+    InvoiceStatus,
+)
 from bot_financeiro.domain.money import Money
 from bot_financeiro.domain.movements import InvoicePayment
 from bot_financeiro.domain.resource_account import AccountType, ResourceAccount
@@ -85,6 +92,522 @@ def test_card_purchase_recognizes_expense_and_debt_without_resource_account() ->
     assert invoice.status_on(date(2026, 9, 9)) is InvoiceStatus.OPEN
     assert updated.available_limit == Money("800.00", "BRL")
     assert card.available_limit == Money("1000.00", "BRL")
+
+
+def test_installment_purchase_recognizes_full_expense_and_debt_but_splits_invoices() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("2000.00", "BRL"),
+        metadata=metadata(
+            "11da725a-4203-494c-9446-1d67502576ae",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    allocation = expense(
+        "1200.00",
+        effective_date=date(2026, 9, 9),
+        record_id="3d828450-6c78-4d44-b298-77768f7009fc",
+        catalog=catalog,
+        category_id=category_id,
+    )
+
+    purchase, updated = card.purchase_in_installments(
+        allocation=allocation,
+        installment_count=12,
+        catalog=catalog,
+    )
+
+    assert isinstance(purchase, InstallmentPurchase)
+    assert purchase.amount == Money("1200.00", "BRL")
+    assert purchase.is_expense is True
+    assert purchase.allocation.metadata.effective_date == date(2026, 9, 9)
+    assert len(purchase.installments) == 12
+    assert {installment.amount for installment in purchase.installments} == {
+        Money("100.00", "BRL")
+    }
+    assert [installment.sequence for installment in purchase.installments] == list(
+        range(1, 13)
+    )
+    assert purchase.installments[0].cycle.closing_date == date(2026, 9, 10)
+    assert purchase.installments[-1].cycle.closing_date == date(2027, 8, 10)
+    assert all(
+        updated.invoice(installment.cycle.closing_date).installments == (installment,)
+        for installment in purchase.installments
+    )
+    assert all(
+        updated.invoice(installment.cycle.closing_date).principal_due
+        == Money("100.00", "BRL")
+        for installment in purchase.installments
+    )
+    assert updated.available_limit == Money("800.00", "BRL")
+    assert card.available_limit == Money("2000.00", "BRL")
+
+
+def test_installment_purchase_assigns_residual_cents_to_first_installments() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=31,
+        due_day=5,
+        limit=None,
+        metadata=metadata(
+            "864681b4-7342-4b7f-bd4a-ce2880f86a6a",
+            effective_date=date(2026, 12, 1),
+        ),
+    )
+    allocation = expense(
+        "10.00",
+        effective_date=date(2026, 12, 31),
+        record_id="374e0879-622d-469e-afd1-1544dc18e101",
+        catalog=catalog,
+        category_id=category_id,
+    )
+
+    purchase, _ = card.purchase_in_installments(
+        allocation=allocation,
+        installment_count=3,
+        catalog=catalog,
+    )
+
+    assert tuple(item.amount for item in purchase.installments) == (
+        Money("3.34", "BRL"),
+        Money("3.33", "BRL"),
+        Money("3.33", "BRL"),
+    )
+    assert tuple(item.cycle.closing_date for item in purchase.installments) == (
+        date(2026, 12, 31),
+        date(2027, 1, 31),
+        date(2027, 2, 28),
+    )
+
+
+def test_installment_purchase_correction_replaces_only_open_installments() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("500.00", "BRL"),
+        metadata=metadata(
+            "a65985ae-0220-4ee0-a8af-c3a0297bf43a",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    original_allocation = expense(
+        "100.00",
+        effective_date=date(2026, 9, 9),
+        record_id="d6335db1-c0fc-4200-92ee-d434c651f0f6",
+        catalog=catalog,
+        category_id=category_id,
+    )
+    purchase, card = card.purchase_in_installments(
+        allocation=original_allocation,
+        installment_count=4,
+        catalog=catalog,
+    )
+    corrected_allocation = expense(
+        "103.00",
+        effective_date=date(2026, 9, 9),
+        record_id="8ca40e6c-5352-47a8-bebb-e29c2a431e77",
+        catalog=catalog,
+        category_id=category_id,
+    )
+
+    correction, corrected = card.correct_installment_purchase(
+        purchase_id=purchase.purchase_id,
+        corrected_allocation=corrected_allocation,
+        remaining_installment_count=3,
+        reason="Valor final confirmado pela operadora",
+        metadata=metadata(
+            "8fc2f170-1688-4a0d-bd3c-52bb64fb605f",
+            effective_date=date(2026, 9, 11),
+        ),
+        catalog=catalog,
+    )
+
+    assert isinstance(correction, InstallmentPurchaseCorrected)
+    assert correction.is_expense is False
+    assert card.history[-1] == purchase
+    assert corrected.history[:-1] == card.history
+    assert corrected.history[-1] == correction
+    assert correction.previous_installments == purchase.installments[1:]
+
+    current = corrected.installments_for_purchase(purchase.purchase_id)
+    assert current[0] == purchase.installments[0]
+    assert tuple(item.amount for item in current) == (
+        Money("25.00", "BRL"),
+        Money("26.00", "BRL"),
+        Money("26.00", "BRL"),
+        Money("26.00", "BRL"),
+    )
+    assert corrected.expense_for_purchase(purchase.purchase_id) == corrected_allocation
+    assert corrected.invoice(date(2026, 9, 10)).installments == (
+        purchase.installments[0],
+    )
+    assert corrected.available_limit == Money("397.00", "BRL")
+
+
+def test_correction_may_remove_all_open_installments_when_total_equals_frozen_sum() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("500.00", "BRL"),
+        metadata=metadata(
+            "2b79ed49-43bf-485e-be8a-571a09ef8fd6",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    purchase, card = card.purchase_in_installments(
+        allocation=expense(
+            "100.00",
+            effective_date=date(2026, 9, 9),
+            record_id="26b00932-a3e4-41eb-8a70-e32357233810",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        installment_count=4,
+        catalog=catalog,
+    )
+
+    correction, corrected = card.correct_installment_purchase(
+        purchase_id=purchase.purchase_id,
+        corrected_allocation=expense(
+            "25.00",
+            effective_date=date(2026, 9, 9),
+            record_id="3033d716-97e5-46b4-9255-b8c641fbd30b",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        remaining_installment_count=0,
+        reason="Cancelamento das cobranças ainda abertas",
+        metadata=metadata(
+            "04b5f144-01af-4a67-ad42-7885e4541f20",
+            effective_date=date(2026, 9, 11),
+        ),
+        catalog=catalog,
+    )
+
+    assert correction.replacement_installments == ()
+    assert corrected.installments_for_purchase(purchase.purchase_id) == (
+        purchase.installments[0],
+    )
+    assert corrected.available_limit == Money("475.00", "BRL")
+
+
+def test_installment_invoice_payment_moves_cash_without_creating_another_expense() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("500.00", "BRL"),
+        metadata=metadata(
+            "9ee0ce0b-bba4-4f32-8f55-a293d8d1087c",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    purchase, card = card.purchase_in_installments(
+        allocation=expense(
+            "120.00",
+            effective_date=date(2026, 9, 9),
+            record_id="0325eed5-05db-4b13-b415-875b226defa6",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        installment_count=3,
+        catalog=catalog,
+    )
+    account = ResourceAccount.open(
+        name="Conta principal",
+        account_type=AccountType.CHECKING,
+        currency="BRL",
+        initial_balance=Money("500.00", "BRL"),
+        metadata=metadata(
+            "d021a02c-8502-450c-a2bd-9465e8ca2491",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+
+    payment, paid_card, paid_account = card.pay_invoice(
+        closing_date=purchase.installments[0].cycle.closing_date,
+        account=account,
+        amount=Money("40.00", "BRL"),
+        metadata=metadata(
+            "776c72bf-8f3f-4825-836f-dfba20b27968",
+            effective_date=date(2026, 9, 17),
+        ),
+    )
+
+    assert payment.is_expense is False
+    assert payment.is_income is False
+    assert paid_account.balance == Money("460.00", "BRL")
+    assert paid_card.invoice(date(2026, 9, 10)).amount_due == Money("0.00", "BRL")
+    assert paid_card.available_limit == Money("420.00", "BRL")
+    assert paid_card.expense_for_purchase(purchase.purchase_id).total == Money(
+        "120.00", "BRL"
+    )
+    cash_flow = paid_card.cash_flow(
+        start_date=date(2026, 9, 1), end_date=date(2026, 11, 30)
+    )
+    assert isinstance(cash_flow, CardCashFlow)
+    assert cash_flow.scheduled_installments == purchase.installments
+    assert tuple(
+        item.cycle.due_date for item in cash_flow.scheduled_installments
+    ) == (date(2026, 9, 17), date(2026, 10, 17), date(2026, 11, 17))
+    assert cash_flow.realized_payments == (payment,)
+    assert cash_flow.realized_payments[0].metadata.effective_date == date(2026, 9, 17)
+
+
+def test_correction_freezes_an_invoice_paid_before_its_effective_date() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("500.00", "BRL"),
+        metadata=metadata(
+            "78624e48-f493-481b-987f-d60f48e4487a",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    purchase, card = card.purchase_in_installments(
+        allocation=expense(
+            "90.00",
+            effective_date=date(2026, 9, 9),
+            record_id="a39a411a-c673-40b0-9711-63d59d4b2de1",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        installment_count=3,
+        catalog=catalog,
+    )
+    account = ResourceAccount.open(
+        name="Conta principal",
+        account_type=AccountType.CHECKING,
+        currency="BRL",
+        initial_balance=Money("500.00", "BRL"),
+        metadata=metadata(
+            "9b0c094c-ebc4-442d-a004-fb03751089ec",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    _, card, _ = card.pay_invoice(
+        closing_date=date(2026, 10, 10),
+        account=account,
+        amount=Money("30.00", "BRL"),
+        metadata=metadata(
+            "df10be47-439b-47c5-b807-28ea852f759a",
+            effective_date=date(2026, 9, 9),
+        ),
+    )
+    correction_date = date(2026, 9, 9)
+
+    correction, corrected = card.correct_installment_purchase(
+        purchase_id=purchase.purchase_id,
+        corrected_allocation=expense(
+            "100.00",
+            effective_date=date(2026, 9, 9),
+            record_id="02a1fe9a-e133-456f-a59f-7c7d95591b0e",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        remaining_installment_count=2,
+        reason="Cobrança corrigida",
+        metadata=metadata(
+            "c6a01175-a3e0-443c-8a9e-f77c5e25a19e",
+            effective_date=correction_date,
+        ),
+        catalog=catalog,
+    )
+
+    assert correction.previous_installments == (
+        purchase.installments[0],
+        purchase.installments[2],
+    )
+    current = corrected.installments_for_purchase(purchase.purchase_id)
+    assert tuple(item.cycle.closing_date for item in current) == (
+        date(2026, 9, 10),
+        date(2026, 10, 10),
+        date(2026, 11, 10),
+    )
+    assert tuple(item.amount for item in current) == (
+        Money("35.00", "BRL"),
+        Money("30.00", "BRL"),
+        Money("35.00", "BRL"),
+    )
+    assert corrected.invoice(date(2026, 10, 10)).status_on(correction_date) is InvoiceStatus.PAID
+    assert corrected.available_limit == Money("430.00", "BRL")
+
+    with pytest.raises(
+        ValueError, match="corrected total cannot be lower than frozen installments"
+    ):
+        card.correct_installment_purchase(
+            purchase_id=purchase.purchase_id,
+            corrected_allocation=expense(
+                "29.99",
+                effective_date=date(2026, 9, 9),
+                record_id="09c5a31d-2237-401b-bc2b-b37ee21b5ace",
+                catalog=catalog,
+                category_id=category_id,
+            ),
+            remaining_installment_count=1,
+            reason="Valor inválido",
+            metadata=metadata(
+                "979422c1-c60b-4b97-a37c-e4908bb19764",
+                effective_date=correction_date,
+            ),
+            catalog=catalog,
+        )
+
+
+def test_correction_does_not_freeze_payment_with_later_effective_date() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("500.00", "BRL"),
+        metadata=metadata(
+            "be619a97-b41d-4de9-9f94-a379f23f2e7f",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    purchase, card = card.purchase_in_installments(
+        allocation=expense(
+            "90.00",
+            effective_date=date(2026, 9, 9),
+            record_id="cfe8a4b7-1345-4fbb-8574-c6553b59e9f9",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        installment_count=3,
+        catalog=catalog,
+    )
+    account = ResourceAccount.open(
+        name="Conta principal",
+        account_type=AccountType.CHECKING,
+        currency="BRL",
+        initial_balance=Money("500.00", "BRL"),
+        metadata=metadata(
+            "ab9af7bd-46dd-4c86-9934-ff1a350007a7",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    _, card, _ = card.pay_invoice(
+        closing_date=date(2026, 10, 10),
+        account=account,
+        amount=Money("30.00", "BRL"),
+        metadata=metadata(
+            "7dd07907-f974-4837-ae78-35fc066f8edc",
+            effective_date=date(2026, 10, 17),
+        ),
+    )
+
+    correction, corrected = card.correct_installment_purchase(
+        purchase_id=purchase.purchase_id,
+        corrected_allocation=expense(
+            "99.00",
+            effective_date=date(2026, 9, 9),
+            record_id="26beb485-e79c-45ad-97b2-2542f39b2f8e",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        remaining_installment_count=3,
+        reason="Valor final corrigido",
+        metadata=metadata(
+            "758b31ab-80e3-4513-81be-022f83c8180a",
+            effective_date=date(2026, 9, 9),
+        ),
+        catalog=catalog,
+    )
+
+    assert correction.previous_installments == purchase.installments
+    assert tuple(
+        item.amount
+        for item in corrected.installments_for_purchase(purchase.purchase_id)
+    ) == (Money("33.00", "BRL"),) * 3
+    assert corrected.invoice(date(2026, 10, 10)).amount_due == Money("3.00", "BRL")
+
+
+def test_retroactive_correction_uses_schedule_effective_on_its_date() -> None:
+    catalog, category_id = expense_catalog()
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("500.00", "BRL"),
+        metadata=metadata(
+            "9ef0bb5f-fba0-4331-982e-2d21098c9114",
+            effective_date=date(2026, 9, 1),
+        ),
+    )
+    purchase, card = card.purchase_in_installments(
+        allocation=expense(
+            "90.00",
+            effective_date=date(2026, 9, 9),
+            record_id="20508e55-ea4b-410e-a78c-c7c13b79d088",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        installment_count=3,
+        catalog=catalog,
+    )
+    _, card = card.correct_installment_purchase(
+        purchase_id=purchase.purchase_id,
+        corrected_allocation=expense(
+            "96.00",
+            effective_date=date(2026, 9, 9),
+            record_id="eeab1bb4-c790-4fa5-9c7f-573e147a241b",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        remaining_installment_count=2,
+        reason="Correção futura já registrada",
+        metadata=metadata(
+            "b5902f8a-7f83-46d4-91fd-dd846387c535",
+            effective_date=date(2026, 9, 20),
+        ),
+        catalog=catalog,
+    )
+
+    retroactive, corrected = card.correct_installment_purchase(
+        purchase_id=purchase.purchase_id,
+        corrected_allocation=expense(
+            "99.00",
+            effective_date=date(2026, 9, 9),
+            record_id="1bd9b65c-adf2-4d28-a5c4-96529c2e3152",
+            catalog=catalog,
+            category_id=category_id,
+        ),
+        remaining_installment_count=3,
+        reason="Correção retroativa confirmada",
+        metadata=metadata(
+            "ebf47b37-4bf7-4ace-8874-33fae1dc3b4c",
+            effective_date=date(2026, 9, 9),
+        ),
+        catalog=catalog,
+    )
+
+    assert retroactive.previous_installments == purchase.installments
+    assert retroactive.frozen_installments == ()
+    assert tuple(
+        item.amount
+        for item in corrected.installments_for_purchase(purchase.purchase_id)
+    ) == (Money("33.00", "BRL"),) * 3
+    assert corrected.available_limit == Money("401.00", "BRL")
 
 
 def test_purchase_on_closing_day_stays_in_cycle_and_status_changes_after_boundaries() -> None:

@@ -15,11 +15,14 @@ from bot_financeiro.application.resource_accounts import ResourceAccountReposito
 from bot_financeiro.domain.audit import RecordMetadata
 from bot_financeiro.domain.categories import Allocation
 from bot_financeiro.domain.credit_cards import (
+    CardCashFlow,
     CardCreditApplied,
     CardCreditGranted,
     CardPurchase,
     CardRefund,
     CreditCard,
+    InstallmentPurchase,
+    InstallmentPurchaseCorrected,
     Invoice,
     InvoiceAssignmentCorrected,
     InvoiceFinancialCharge,
@@ -97,6 +100,50 @@ class CreditCardOperations:
             unit_of_work.credit_cards.save(updated)
             unit_of_work.commit()
         return purchase
+
+    def record_installment_purchase(
+        self,
+        *,
+        card_id: UUID,
+        allocation: Allocation,
+        installment_count: int,
+    ) -> InstallmentPurchase:
+        with self._unit_of_work_factory() as unit_of_work:
+            card = self._card(unit_of_work, card_id)
+            purchase, updated = card.purchase_in_installments(
+                allocation=allocation,
+                installment_count=installment_count,
+                catalog=unit_of_work.categories.catalog(),
+            )
+            unit_of_work.allocations.add(allocation)
+            unit_of_work.credit_cards.save(updated)
+            unit_of_work.commit()
+        return purchase
+
+    def correct_installment_purchase(
+        self,
+        *,
+        card_id: UUID,
+        purchase_id: UUID,
+        corrected_allocation: Allocation,
+        remaining_installment_count: int,
+        reason: str,
+        metadata: RecordMetadata,
+    ) -> InstallmentPurchaseCorrected:
+        with self._unit_of_work_factory() as unit_of_work:
+            card = self._card(unit_of_work, card_id)
+            correction, updated = card.correct_installment_purchase(
+                purchase_id=purchase_id,
+                corrected_allocation=corrected_allocation,
+                remaining_installment_count=remaining_installment_count,
+                reason=reason,
+                metadata=metadata,
+                catalog=unit_of_work.categories.catalog(),
+            )
+            unit_of_work.allocations.add(corrected_allocation)
+            unit_of_work.credit_cards.save(updated)
+            unit_of_work.commit()
+        return correction
 
     def correct_invoice_assignment(
         self,
@@ -230,6 +277,19 @@ class CreditCardOperations:
     def list_invoices(self, *, card_id: UUID) -> tuple[Invoice, ...]:
         with self._unit_of_work_factory() as unit_of_work:
             return self._card(unit_of_work, card_id).invoices()
+
+    def get_cash_flow(
+        self,
+        *,
+        card_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> CardCashFlow:
+        with self._unit_of_work_factory() as unit_of_work:
+            return self._card(unit_of_work, card_id).cash_flow(
+                start_date=start_date,
+                end_date=end_date,
+            )
 
     @staticmethod
     def _card(unit_of_work: CreditCardUnitOfWork, card_id: UUID) -> CreditCard:

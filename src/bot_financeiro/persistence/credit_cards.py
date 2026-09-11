@@ -26,7 +26,11 @@ from bot_financeiro.domain.credit_cards import (
     CreditCard,
     CreditCardEvent,
     CreditCardOpened,
+    Installment,
+    InstallmentPurchase,
+    InstallmentPurchaseCorrected,
     InvoiceAssignmentCorrected,
+    InvoiceCycle,
     InvoiceFinancialCharge,
 )
 from bot_financeiro.domain.money import Money
@@ -85,9 +89,15 @@ credit_card_history_entries = Table(
         """
         (kind = 'opened' AND amount_minor_units IS NULL AND currency IS NULL)
         OR
-        (kind IN ('purchase', 'financial_charge') AND amount_minor_units > 0
+        (kind IN ('purchase', 'financial_charge', 'installment_purchase')
+            AND amount_minor_units > 0
             AND currency IS NOT NULL AND allocation_id IS NOT NULL
-            AND invoice_closing_date IS NOT NULL)
+            AND (invoice_closing_date IS NOT NULL) =
+                (kind IN ('purchase', 'financial_charge')))
+        OR
+        (kind = 'installment_purchase_corrected' AND amount_minor_units > 0
+            AND currency IS NOT NULL AND allocation_id IS NOT NULL
+            AND purchase_id IS NOT NULL AND reason IS NOT NULL)
         OR
         (kind = 'assignment_corrected' AND amount_minor_units IS NULL
             AND purchase_id IS NOT NULL AND previous_closing_date IS NOT NULL
@@ -115,25 +125,59 @@ credit_card_history_entries = Table(
     ),
     CheckConstraint(
         """
-        (allocation_id IS NOT NULL) = (kind IN ('purchase', 'financial_charge'))
+        (allocation_id IS NOT NULL) =
+            (kind IN ('purchase', 'financial_charge', 'installment_purchase',
+                'installment_purchase_corrected'))
         AND (account_id IS NOT NULL) = (kind = 'invoice_payment')
         AND (movement_id IS NOT NULL) = (kind = 'invoice_payment')
-        AND (purchase_id IS NOT NULL) = (kind IN ('assignment_corrected', 'refund'))
+        AND (purchase_id IS NOT NULL) =
+            (kind IN ('assignment_corrected', 'refund',
+                'installment_purchase_corrected'))
         AND (invoice_closing_date IS NOT NULL) =
             (kind IN ('purchase', 'financial_charge', 'invoice_payment', 'credit_applied'))
         AND (previous_closing_date IS NOT NULL) = (kind = 'assignment_corrected')
         AND (target_closing_date IS NOT NULL) = (kind = 'assignment_corrected')
         AND (source_event_id IS NOT NULL) = (kind = 'credit_granted')
-        AND (reason IS NOT NULL) = (kind IN ('assignment_corrected', 'credit_granted'))
+        AND (reason IS NOT NULL) =
+            (kind IN ('assignment_corrected', 'credit_granted',
+                'installment_purchase_corrected'))
         AND (applied_amount_minor_units IS NOT NULL) = (kind = 'invoice_payment')
         AND (principal_reduction_minor_units IS NOT NULL) = (kind = 'refund')
         AND (currency IS NOT NULL) =
             (kind IN ('purchase', 'financial_charge', 'invoice_payment',
-                'refund', 'credit_granted', 'credit_applied'))
+                'refund', 'credit_granted', 'credit_applied',
+                'installment_purchase', 'installment_purchase_corrected'))
         """,
         name="ck_credit_card_history_columns",
     ),
     UniqueConstraint("card_id", "sequence"),
+)
+
+credit_card_installments = Table(
+    "credit_card_installments",
+    metadata,
+    Column(
+        "event_id",
+        String(36),
+        ForeignKey(credit_card_history_entries.c.id),
+        primary_key=True,
+    ),
+    Column("role", String(16), primary_key=True),
+    Column("position", Integer, primary_key=True),
+    Column("purchase_id", String(36), nullable=False),
+    Column("installment_sequence", Integer, nullable=False),
+    Column("amount_minor_units", Integer, nullable=False),
+    Column("currency", String(3), nullable=False),
+    Column("invoice_closing_date", Date, nullable=False),
+    Column("invoice_due_date", Date, nullable=False),
+    CheckConstraint(
+        "role IN ('original', 'previous', 'frozen', 'replacement')",
+        name="ck_credit_card_installment_role",
+    ),
+    CheckConstraint(
+        "position >= 1 AND installment_sequence >= 1 AND amount_minor_units > 0",
+        name="ck_credit_card_installment_positive_values",
+    ),
 )
 
 
@@ -216,6 +260,7 @@ class SqlAlchemyCreditCardRepository:
                     self._event_values(card.card_id, sequence, event)
                 )
             )
+            self._add_installments(event)
 
     def _event(self, row: object, currency: str) -> CreditCardEvent:
         kind = row["kind"]
@@ -225,7 +270,7 @@ class SqlAlchemyCreditCardRepository:
             if row["amount_minor_units"] is None
             else money_from_minor_units(row["amount_minor_units"], row["currency"])
         )
-        if kind in {"purchase", "financial_charge"}:
+        if kind in {"purchase", "financial_charge", "installment_purchase"}:
             allocation = SqlAlchemyAllocationRepository(self._session).get(
                 UUID(row["allocation_id"])
             )
@@ -242,6 +287,12 @@ class SqlAlchemyCreditCardRepository:
                     allocation=allocation,
                     invoice_closing_date=row["invoice_closing_date"],
                 )
+            if kind == "installment_purchase":
+                return InstallmentPurchase(
+                    card_id=UUID(row["card_id"]),
+                    allocation=allocation,
+                    installments=self._installments(UUID(row["id"]), "original"),
+                )
             return InvoiceFinancialCharge(
                 card_id=UUID(row["card_id"]),
                 invoice_closing_date=row["invoice_closing_date"],
@@ -253,6 +304,26 @@ class SqlAlchemyCreditCardRepository:
                 purchase_id=UUID(row["purchase_id"]),
                 previous_closing_date=row["previous_closing_date"],
                 target_closing_date=row["target_closing_date"],
+                reason=row["reason"],
+                metadata=event_metadata,
+            )
+        if kind == "installment_purchase_corrected":
+            allocation = SqlAlchemyAllocationRepository(self._session).get(
+                UUID(row["allocation_id"])
+            )
+            if allocation is None or allocation.total != amount:
+                raise ValueError("installment correction diverges from its allocation")
+            return InstallmentPurchaseCorrected(
+                card_id=UUID(row["card_id"]),
+                purchase_id=UUID(row["purchase_id"]),
+                corrected_allocation=allocation,
+                previous_installments=self._installments(
+                    UUID(row["id"]), "previous"
+                ),
+                frozen_installments=self._installments(UUID(row["id"]), "frozen"),
+                replacement_installments=self._installments(
+                    UUID(row["id"]), "replacement"
+                ),
                 reason=row["reason"],
                 metadata=event_metadata,
             )
@@ -337,6 +408,24 @@ class SqlAlchemyCreditCardRepository:
                 allocation_id=str(event.allocation.allocation_id),
                 invoice_closing_date=event.invoice_closing_date,
             )
+        elif isinstance(event, InstallmentPurchase):
+            values.update(
+                kind="installment_purchase",
+                amount_minor_units=money_to_minor_units(event.amount),
+                currency=event.amount.currency,
+                allocation_id=str(event.allocation.allocation_id),
+            )
+        elif isinstance(event, InstallmentPurchaseCorrected):
+            values.update(
+                kind="installment_purchase_corrected",
+                amount_minor_units=money_to_minor_units(
+                    event.corrected_allocation.total
+                ),
+                currency=event.corrected_allocation.total.currency,
+                allocation_id=str(event.corrected_allocation.allocation_id),
+                purchase_id=str(event.purchase_id),
+                reason=event.reason,
+            )
         elif isinstance(event, InvoiceAssignmentCorrected):
             values.update(
                 kind="assignment_corrected",
@@ -394,6 +483,56 @@ class SqlAlchemyCreditCardRepository:
             origin=event_metadata.origin.value,
         )
         return values
+
+    def _add_installments(self, event: CreditCardEvent) -> None:
+        groups: tuple[tuple[str, tuple[Installment, ...]], ...] = ()
+        if isinstance(event, InstallmentPurchase):
+            groups = (("original", event.installments),)
+        elif isinstance(event, InstallmentPurchaseCorrected):
+            groups = (
+                ("previous", event.previous_installments),
+                ("frozen", event.frozen_installments),
+                ("replacement", event.replacement_installments),
+            )
+        for role, installments in groups:
+            for position, installment in enumerate(installments, start=1):
+                self._session.execute(
+                    insert(credit_card_installments).values(
+                        event_id=str(event.event_id),
+                        role=role,
+                        position=position,
+                        purchase_id=str(installment.purchase_id),
+                        installment_sequence=installment.sequence,
+                        amount_minor_units=money_to_minor_units(installment.amount),
+                        currency=installment.amount.currency,
+                        invoice_closing_date=installment.cycle.closing_date,
+                        invoice_due_date=installment.cycle.due_date,
+                    )
+                )
+
+    def _installments(self, event_id: UUID, role: str) -> tuple[Installment, ...]:
+        rows = tuple(
+            self._session.execute(
+                select(credit_card_installments)
+                .where(credit_card_installments.c.event_id == str(event_id))
+                .where(credit_card_installments.c.role == role)
+                .order_by(credit_card_installments.c.position)
+            ).mappings()
+        )
+        return tuple(
+            Installment(
+                purchase_id=UUID(row["purchase_id"]),
+                sequence=row["installment_sequence"],
+                amount=money_from_minor_units(
+                    row["amount_minor_units"], row["currency"]
+                ),
+                cycle=InvoiceCycle(
+                    closing_date=row["invoice_closing_date"],
+                    due_date=row["invoice_due_date"],
+                ),
+            )
+            for row in rows
+        )
 
     @staticmethod
     def _metadata(row: object) -> RecordMetadata:

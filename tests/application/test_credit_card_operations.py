@@ -95,6 +95,120 @@ def test_credit_card_purchase_is_persisted_as_expense_and_debt_without_account_e
     assert persisted_account == account
 
 
+def test_installment_purchase_and_correction_round_trip_without_moving_account() -> None:
+    operations, finances, account, catalog, category_id, engine = configured_scenario()
+    card = operations.create_card(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=Money("1000.00", "BRL"),
+        metadata=metadata("e5ae4d3e-3a25-4035-a384-d43b4b28bac2", day=1),
+    )
+    original_amount = Money("120.00", "BRL")
+    purchase = operations.record_installment_purchase(
+        card_id=card.card_id,
+        allocation=Allocation.create(
+            total=original_amount,
+            nature=FinancialNature.EXPENSE,
+            parts=(AllocationPart(category_id, original_amount),),
+            catalog=catalog,
+            metadata=metadata("f49152dd-96c0-430e-83d9-da870df5d85e", day=9),
+        ),
+        installment_count=3,
+    )
+    corrected_amount = Money("123.00", "BRL")
+
+    operations.correct_installment_purchase(
+        card_id=card.card_id,
+        purchase_id=purchase.purchase_id,
+        corrected_allocation=Allocation.create(
+            total=corrected_amount,
+            nature=FinancialNature.EXPENSE,
+            parts=(AllocationPart(category_id, corrected_amount),),
+            catalog=catalog,
+            metadata=metadata("636bc42a-48e9-436b-b9cf-b55a5c238091", day=9),
+        ),
+        remaining_installment_count=2,
+        reason="Valor final da compra",
+        metadata=metadata("408d66ec-c819-4870-ab5a-88cbce81fcdd", day=11),
+    )
+
+    restored = operations.get_card(card.card_id)
+    assert restored is not None
+    assert restored.expense_for_purchase(purchase.purchase_id).total == corrected_amount
+    assert tuple(
+        installment.amount
+        for installment in restored.installments_for_purchase(purchase.purchase_id)
+    ) == (
+        Money("40.00", "BRL"),
+        Money("41.50", "BRL"),
+        Money("41.50", "BRL"),
+    )
+    assert restored.available_limit == Money("877.00", "BRL")
+    cash_flow = operations.get_cash_flow(
+        card_id=card.card_id,
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 11, 30),
+    )
+    assert tuple(item.amount for item in cash_flow.scheduled_installments) == (
+        Money("40.00", "BRL"),
+        Money("41.50", "BRL"),
+        Money("41.50", "BRL"),
+    )
+    assert cash_flow.realized_payments == ()
+    assert finances.account_statement(account.account_id).balance == Money(
+        "1000.00", "BRL"
+    )
+    with pytest.raises(IntegrityError, match="credit card installments are append-only"):
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE credit_card_installments SET amount_minor_units = 1"
+            )
+
+
+def test_installment_purchase_rolls_back_all_records_when_schedule_write_fails() -> None:
+    operations, _, _, catalog, category_id, engine = configured_scenario()
+    card = operations.create_card(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=None,
+        metadata=metadata("79423a68-6fec-41ca-874b-65aa0b44b198", day=1),
+    )
+    amount = Money("90.00", "BRL")
+    allocation = Allocation.create(
+        total=amount,
+        nature=FinancialNature.EXPENSE,
+        parts=(AllocationPart(category_id, amount),),
+        catalog=catalog,
+        metadata=metadata("3868b04c-ee26-4b57-9e15-3b22a5b2d949", day=9),
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TRIGGER reject_installment_schedule
+            BEFORE INSERT ON credit_card_installments
+            BEGIN SELECT RAISE(ABORT, 'simulated schedule failure'); END
+            """
+        )
+
+    with pytest.raises(IntegrityError, match="simulated schedule failure"):
+        operations.record_installment_purchase(
+            card_id=card.card_id,
+            allocation=allocation,
+            installment_count=3,
+        )
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TRIGGER reject_installment_schedule")
+    purchase = operations.record_purchase(card_id=card.card_id, allocation=allocation)
+    restored = operations.get_card(card.card_id)
+    assert restored is not None
+    assert restored.history == (card.opening, purchase)
+
+
 def configured_scenario() -> tuple[
     CreditCardOperations,
     FinancialOperations,

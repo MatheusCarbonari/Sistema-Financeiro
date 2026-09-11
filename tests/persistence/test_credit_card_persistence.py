@@ -72,6 +72,60 @@ def test_migration_0005_preserves_existing_resource_account_data() -> None:
     } <= movement_columns
 
 
+def test_migration_0006_preserves_existing_credit_card_history() -> None:
+    engine = create_sqlite_engine("sqlite+pysqlite:///:memory:")
+    config = Config("alembic.ini")
+    card_id = "8c34fb9e-7a9f-4a2e-b7b8-4eed158a10e6"
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0005")
+        connection.exec_driver_sql(
+            """
+            INSERT INTO credit_cards (
+                id, name, currency, closing_day, due_day, limit_minor_units
+            ) VALUES (?, 'Cartão anterior', 'BRL', 10, 17, 100000)
+            """,
+            (card_id,),
+        )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO credit_card_history_entries (
+                id, card_id, sequence, kind, effective_date, recorded_at, origin
+            ) VALUES (?, ?, 0, 'opened', '2026-09-01',
+                '2026-09-01T12:00:00+00:00', 'manual')
+            """,
+            (card_id, card_id),
+        )
+
+        command.upgrade(config, "head")
+        card = connection.exec_driver_sql(
+            "SELECT name, limit_minor_units FROM credit_cards WHERE id = ?",
+            (card_id,),
+        ).one()
+        history = connection.exec_driver_sql(
+            "SELECT kind, sequence FROM credit_card_history_entries WHERE card_id = ?",
+            (card_id,),
+        ).one()
+        installment_columns = {
+            row[1]
+            for row in connection.exec_driver_sql(
+                "PRAGMA table_info(credit_card_installments)"
+            )
+        }
+
+    assert card == ("Cartão anterior", 100000)
+    assert history == ("opened", 0)
+    assert {
+        "event_id",
+        "role",
+        "position",
+        "purchase_id",
+        "amount_minor_units",
+        "invoice_closing_date",
+        "invoice_due_date",
+    } <= installment_columns
+
+
 @pytest.mark.parametrize(
     "statement",
     [
@@ -137,4 +191,39 @@ def test_database_rejects_malformed_credit_card_history_event() -> None:
                     "3b4514f1-f3b6-4739-99de-98b85beecf96",
                     str(card.card_id),
                 ),
+            )
+
+
+def test_database_rejects_installment_schedule_for_unrelated_history_event() -> None:
+    engine = create_sqlite_engine("sqlite+pysqlite:///:memory:")
+    config = Config("alembic.ini")
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+    card = CreditCard.open(
+        name="Cartão principal",
+        currency="BRL",
+        closing_day=10,
+        due_day=17,
+        limit=None,
+        metadata=metadata(),
+    )
+    with SqlAlchemyUnitOfWork(sessionmaker(bind=engine)) as unit_of_work:
+        SqlAlchemyCreditCardRepository(unit_of_work.session).add(card)
+        unit_of_work.commit()
+
+    with pytest.raises(
+        IntegrityError, match="installment schedule does not match its history event"
+    ):
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                INSERT INTO credit_card_installments (
+                    event_id, role, position, purchase_id, installment_sequence,
+                    amount_minor_units, currency, invoice_closing_date,
+                    invoice_due_date
+                ) VALUES (?, 'original', 1, ?, 1, 1000, 'BRL',
+                    '2026-09-10', '2026-09-17')
+                """,
+                (str(card.card_id), str(card.card_id)),
             )
