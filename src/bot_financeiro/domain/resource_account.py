@@ -28,6 +28,9 @@ class AccountHistoryEntryKind(StrEnum):
     TRANSFER_OUT = "transfer_out"
     BILL_PAYMENT = "bill_payment"
     INVOICE_PAYMENT = "invoice_payment"
+    ACCOUNT_EXPENSE_REFUND = "account_expense_refund"
+    FACT_CORRECTION = "fact_correction"
+    FACT_CANCELLATION = "fact_cancellation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,21 +50,31 @@ class AccountHistoryEntry:
             and not (self.reason or "").strip()
         ):
             raise ValueError("balance adjustment history requires a reason")
-        realized_kinds = {
+        movement_linked_kinds = {
             AccountHistoryEntryKind.INCOME,
             AccountHistoryEntryKind.CASH_EXPENSE,
             AccountHistoryEntryKind.TRANSFER_IN,
             AccountHistoryEntryKind.TRANSFER_OUT,
             AccountHistoryEntryKind.BILL_PAYMENT,
             AccountHistoryEntryKind.INVOICE_PAYMENT,
+            AccountHistoryEntryKind.ACCOUNT_EXPENSE_REFUND,
+            AccountHistoryEntryKind.FACT_CORRECTION,
+            AccountHistoryEntryKind.FACT_CANCELLATION,
         }
-        if self.kind in realized_kinds and self.movement_id is None:
-            raise ValueError("realized account history requires a movement reference")
-        if self.kind not in realized_kinds and self.movement_id is not None:
-            raise ValueError("neutral account history cannot reference a realized movement")
+        if self.kind in movement_linked_kinds and self.movement_id is None:
+            raise ValueError("linked account history requires a movement reference")
+        if self.kind not in movement_linked_kinds and self.movement_id is not None:
+            raise ValueError("neutral account history cannot reference a movement")
+        change_kinds = {
+            AccountHistoryEntryKind.FACT_CORRECTION,
+            AccountHistoryEntryKind.FACT_CANCELLATION,
+        }
+        if self.kind in change_kinds and not (self.reason or "").strip():
+            raise ValueError("financial change history requires a reason")
         incoming_kinds = {
             AccountHistoryEntryKind.INCOME,
             AccountHistoryEntryKind.TRANSFER_IN,
+            AccountHistoryEntryKind.ACCOUNT_EXPENSE_REFUND,
         }
         outgoing_kinds = {
             AccountHistoryEntryKind.CASH_EXPENSE,
@@ -207,14 +220,10 @@ class ResourceAccount:
             AccountHistoryEntryKind.TRANSFER_OUT,
             AccountHistoryEntryKind.BILL_PAYMENT,
             AccountHistoryEntryKind.INVOICE_PAYMENT,
+            AccountHistoryEntryKind.ACCOUNT_EXPENSE_REFUND,
         }:
             raise ValueError("kind is not a realized account movement")
-        if self.status is AccountStatus.ARCHIVED:
-            raise ValueError("archived account rejects new movements")
-        self._require_own_currency(difference)
-        new_balance = self.balance + difference
-        if new_balance.amount < 0 and not self.allows_negative_balance:
-            raise ValueError("negative balance is not allowed for this account")
+        new_balance = self.balance_after_movement(difference)
         entry_metadata = replace(movement_metadata, record_id=uuid4())
         entry = AccountHistoryEntry(
             kind=kind,
@@ -225,12 +234,58 @@ class ResourceAccount:
         )
         return replace(self, balance=new_balance, history=(*self.history, entry))
 
+    def balance_after_movement(self, difference: Money) -> Money:
+        if self.status is AccountStatus.ARCHIVED:
+            raise ValueError("archived account rejects new movements")
+        self._require_own_currency(difference)
+        new_balance = self.balance + difference
+        if new_balance.amount < 0 and not self.allows_negative_balance:
+            raise ValueError("negative balance is not allowed for this account")
+        return new_balance
+
     def statement(self) -> AccountStatement:
         return AccountStatement(
             account_id=self.account_id,
             currency=self.currency,
             entries=self.history,
         )
+
+    def record_fact_change(
+        self,
+        *,
+        kind: AccountHistoryEntryKind,
+        difference: Money,
+        target_movement_id: UUID,
+        reason: str,
+        metadata: RecordMetadata,
+    ) -> "ResourceAccount":
+        if kind not in {
+            AccountHistoryEntryKind.FACT_CORRECTION,
+            AccountHistoryEntryKind.FACT_CANCELLATION,
+        }:
+            raise ValueError("kind is not a financial fact change")
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise ValueError("financial change reason is required")
+        new_balance = self.balance_after_fact_change(difference)
+        entry = AccountHistoryEntry(
+            kind=kind,
+            difference=difference,
+            balance=new_balance,
+            metadata=replace(metadata, record_id=uuid4()),
+            reason=normalized_reason,
+            movement_id=target_movement_id,
+        )
+        return replace(self, balance=new_balance, history=(*self.history, entry))
+
+    def balance_after_fact_change(self, difference: Money) -> Money:
+        if self.status is AccountStatus.ARCHIVED:
+            raise ValueError("archived account rejects financial changes")
+        self._require_own_currency(difference)
+        new_balance = self.balance + difference
+        if new_balance.amount < 0 and not self.allows_negative_balance:
+            raise ValueError("negative balance is not allowed for this account")
+        return new_balance
 
     def archive(self) -> "ResourceAccount":
         if self.balance.amount != 0:

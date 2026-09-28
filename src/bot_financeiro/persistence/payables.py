@@ -22,6 +22,7 @@ from bot_financeiro.domain.money import Money
 from bot_financeiro.domain.movements import BillPayment
 from bot_financeiro.domain.payables import FinancialCharge, Payable, PayableOpened
 from bot_financeiro.persistence.categories import SqlAlchemyAllocationRepository, allocations
+from bot_financeiro.persistence.financial_changes import current_financial_fact
 from bot_financeiro.persistence.financial_operations import (
     SqlAlchemyFinancialMovementRepository,
     SqlAlchemyFinancialOperationUnitOfWork,
@@ -119,10 +120,34 @@ class SqlAlchemyPayableRepository:
             opening.allocation.total,
             opening.allocation.metadata,
         )
-        events: list[PayableOpened | BillPayment | FinancialCharge] = [opening]
+        current_opening = current_financial_fact(self._session, opening)
+        if current_opening is None:
+            return None
+        if not isinstance(current_opening, PayableOpened):
+            raise ValueError("payable opening correction has an invalid type")
+        events: list[PayableOpened | BillPayment | FinancialCharge] = [current_opening]
         for row in history_rows[1:]:
-            events.append(self._event(row))
-        return Payable(history=tuple(events))
+            event = self._event(row)
+            if event is not None:
+                events.append(event)
+        return Payable(history=tuple(events), identity=UUID(payable_row["id"]))
+
+    def get_original_event(self, event_id: UUID) -> PayableOpened | FinancialCharge | None:
+        row = self._session.execute(
+            select(payable_history_entries, payables.c.due_date)
+            .join(payables, payables.c.id == payable_history_entries.c.payable_id)
+            .where(payable_history_entries.c.id == str(event_id))
+        ).mappings().one_or_none()
+        if row is None or row["kind"] not in {"opened", "financial_charge"}:
+            return None
+        allocation = SqlAlchemyAllocationRepository(self._session).get(
+            UUID(row["allocation_id"])
+        )
+        if allocation is None:
+            raise ValueError("payable allocation does not exist")
+        if row["kind"] == "opened":
+            return PayableOpened(allocation=allocation, due_date=row["due_date"])
+        return FinancialCharge(payable_id=UUID(row["payable_id"]), allocation=allocation)
 
     def save(self, payable: Payable) -> None:
         persisted = self.get(payable.payable_id)
@@ -131,7 +156,13 @@ class SqlAlchemyPayableRepository:
         payable.ensure_append_only_successor_of(persisted)
         persisted_size = len(persisted.history)
         new_events = payable.history[persisted_size:]
-        for sequence, event in enumerate(new_events, persisted_size):
+        last_sequence = self._session.scalar(
+            select(payable_history_entries.c.sequence)
+            .where(payable_history_entries.c.payable_id == str(payable.payable_id))
+            .order_by(payable_history_entries.c.sequence.desc())
+            .limit(1)
+        )
+        for sequence, event in enumerate(new_events, (last_sequence or 0) + 1):
             self._session.execute(
                 insert(payable_history_entries).values(
                     self._event_values(payable.payable_id, sequence, event)
@@ -188,7 +219,7 @@ class SqlAlchemyPayableRepository:
             "origin": event_metadata.origin.value,
         }
 
-    def _event(self, row: object) -> BillPayment | FinancialCharge:
+    def _event(self, row: object) -> BillPayment | FinancialCharge | None:
         event_metadata = RecordMetadata(
             effective_date=row["effective_date"],
             recorded_at=datetime.fromisoformat(row["recorded_at"]),
@@ -202,14 +233,17 @@ class SqlAlchemyPayableRepository:
                 amount=money_from_minor_units(row["amount_minor_units"], row["currency"]),
                 metadata=event_metadata,
             )
-            movement = SqlAlchemyFinancialMovementRepository(self._session).get(
+            movement = SqlAlchemyFinancialMovementRepository(self._session).get_recorded(
                 payment.movement_id
             )
             if movement != payment:
                 raise ValueError(
                     "payable payment history diverges from its financial movement"
                 )
-            return payment
+            current = current_financial_fact(self._session, payment)
+            if current is not None and not isinstance(current, BillPayment):
+                raise ValueError("payable payment correction has an invalid type")
+            return current
         if row["kind"] == "financial_charge":
             allocation = SqlAlchemyAllocationRepository(self._session).get(
                 UUID(row["allocation_id"])
@@ -222,10 +256,14 @@ class SqlAlchemyPayableRepository:
                 allocation.total,
                 allocation.metadata,
             )
-            return FinancialCharge(
+            charge = FinancialCharge(
                 payable_id=UUID(row["payable_id"]),
                 allocation=allocation,
             )
+            current = current_financial_fact(self._session, charge)
+            if current is not None and not isinstance(current, FinancialCharge):
+                raise ValueError("payable charge correction has an invalid type")
+            return current
         raise ValueError(f"unknown payable history kind: {row['kind']}")
 
     @staticmethod

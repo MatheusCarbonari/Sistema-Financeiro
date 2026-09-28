@@ -36,6 +36,7 @@ from bot_financeiro.domain.credit_cards import (
 from bot_financeiro.domain.money import Money
 from bot_financeiro.domain.movements import InvoicePayment
 from bot_financeiro.persistence.categories import SqlAlchemyAllocationRepository, allocations
+from bot_financeiro.persistence.financial_changes import current_financial_fact
 from bot_financeiro.persistence.financial_operations import (
     SqlAlchemyFinancialMovementRepository,
     SqlAlchemyFinancialOperationUnitOfWork,
@@ -245,8 +246,32 @@ class SqlAlchemyCreditCardRepository:
         if opening.event_id != UUID(rows[0]["id"]):
             raise ValueError("credit card opening history diverges")
         events: list[CreditCardEvent] = [opening]
-        events.extend(self._event(row, card_row["currency"]) for row in rows[1:])
+        for row in rows[1:]:
+            event = self._event(row, card_row["currency"])
+            if event is not None and isinstance(
+                event, (CardPurchase, InstallmentPurchase, InvoiceFinancialCharge)
+            ):
+                event = current_financial_fact(self._session, event)
+            if event is not None:
+                events.append(event)
         return CreditCard(history=tuple(events))
+
+    def get_original_event(self, event_id: UUID) -> CreditCardEvent | None:
+        row = self._session.execute(
+            select(credit_card_history_entries).where(
+                credit_card_history_entries.c.id == str(event_id)
+            )
+        ).mappings().one_or_none()
+        if row is None or row["kind"] == "opened":
+            return None
+        currency = row["currency"]
+        if currency is None:
+            currency = self._session.scalar(
+                select(credit_cards.c.currency).where(
+                    credit_cards.c.id == row["card_id"]
+                )
+            )
+        return self._event(row, currency)
 
     def save(self, card: CreditCard) -> None:
         persisted = self.get(card.card_id)
@@ -254,7 +279,13 @@ class SqlAlchemyCreditCardRepository:
             raise LookupError(f"credit card {card.card_id} does not exist")
         card.ensure_append_only_successor_of(persisted)
         start = len(persisted.history)
-        for sequence, event in enumerate(card.history[start:], start):
+        last_sequence = self._session.scalar(
+            select(credit_card_history_entries.c.sequence)
+            .where(credit_card_history_entries.c.card_id == str(card.card_id))
+            .order_by(credit_card_history_entries.c.sequence.desc())
+            .limit(1)
+        )
+        for sequence, event in enumerate(card.history[start:], (last_sequence or 0) + 1):
             self._session.execute(
                 insert(credit_card_history_entries).values(
                     self._event_values(card.card_id, sequence, event)
@@ -262,7 +293,7 @@ class SqlAlchemyCreditCardRepository:
             )
             self._add_installments(event)
 
-    def _event(self, row: object, currency: str) -> CreditCardEvent:
+    def _event(self, row: object, currency: str) -> CreditCardEvent | None:
         kind = row["kind"]
         event_metadata = self._metadata(row)
         amount = (
@@ -328,7 +359,7 @@ class SqlAlchemyCreditCardRepository:
                 metadata=event_metadata,
             )
         if kind == "invoice_payment":
-            movement = SqlAlchemyFinancialMovementRepository(self._session).get(
+            movement = SqlAlchemyFinancialMovementRepository(self._session).get_recorded(
                 UUID(row["movement_id"])
             )
             if not isinstance(movement, InvoicePayment):
@@ -346,7 +377,10 @@ class SqlAlchemyCreditCardRepository:
                 or movement.metadata != event_metadata
             ):
                 raise ValueError("invoice payment history diverges from its movement")
-            return movement
+            current = current_financial_fact(self._session, movement)
+            if current is not None and not isinstance(current, InvoicePayment):
+                raise ValueError("invoice payment correction has an invalid type")
+            return current
         if kind == "refund":
             return CardRefund(
                 card_id=UUID(row["card_id"]),

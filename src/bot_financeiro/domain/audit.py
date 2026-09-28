@@ -31,6 +31,14 @@ class RecordMetadata:
         _require_timezone(self.recorded_at, "recorded_at")
 
 
+def ensure_registration_order(
+    metadata: RecordMetadata,
+    *previous: RecordMetadata,
+) -> None:
+    if any(metadata.recorded_at < item.recorded_at for item in previous):
+        raise ValueError("financial changes must preserve registration order")
+
+
 @dataclass(frozen=True, slots=True)
 class AuditEntry:
     record_id: UUID

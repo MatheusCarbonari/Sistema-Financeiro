@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session, sessionmaker
 
 from bot_financeiro.domain.audit import RecordMetadata, RecordOrigin
+from bot_financeiro.domain.financial_changes import AccountExpenseRefund
 from bot_financeiro.domain.movements import (
     BillPayment,
     CashExpense,
@@ -47,15 +48,18 @@ financial_movements = Table(
     Column("currency", String(3), nullable=False),
     Column("account_id", String(36), ForeignKey(resource_accounts.c.id), nullable=True),
     Column("source_account_id", String(36), ForeignKey(resource_accounts.c.id), nullable=True),
-    Column(
-        "destination_account_id", String(36), ForeignKey(resource_accounts.c.id), nullable=True
-    ),
+    Column("destination_account_id", String(36), ForeignKey(resource_accounts.c.id), nullable=True),
     Column("allocation_id", String(36), ForeignKey(allocations.c.id), nullable=True, unique=True),
     Column("related_transfer_id", String(36), ForeignKey("financial_movements.id"), nullable=True),
     Column("payable_id", String(36), ForeignKey("payables.id"), nullable=True),
     Column("card_id", String(36), ForeignKey("credit_cards.id"), nullable=True),
     Column("invoice_closing_date", Date, nullable=True),
     Column("applied_amount_minor_units", Integer, nullable=True),
+    Column(
+        "original_expense_id",
+        String(36),
+        nullable=True,
+    ),
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
@@ -66,24 +70,26 @@ financial_movements = Table(
             AND source_account_id IS NULL AND destination_account_id IS NULL
             AND related_transfer_id IS NULL AND payable_id IS NULL
             AND card_id IS NULL AND invoice_closing_date IS NULL
-            AND applied_amount_minor_units IS NULL)
+            AND applied_amount_minor_units IS NULL AND original_expense_id IS NULL)
         OR
         (kind = 'cash_expense' AND account_id IS NOT NULL AND allocation_id IS NOT NULL
             AND source_account_id IS NULL AND destination_account_id IS NULL
             AND payable_id IS NULL AND card_id IS NULL
-            AND invoice_closing_date IS NULL AND applied_amount_minor_units IS NULL)
+            AND invoice_closing_date IS NULL AND applied_amount_minor_units IS NULL
+            AND original_expense_id IS NULL)
         OR
         (kind = 'transfer' AND account_id IS NULL AND allocation_id IS NULL
             AND source_account_id IS NOT NULL AND destination_account_id IS NOT NULL
             AND source_account_id <> destination_account_id AND related_transfer_id IS NULL
             AND payable_id IS NULL AND card_id IS NULL
-            AND invoice_closing_date IS NULL AND applied_amount_minor_units IS NULL)
+            AND invoice_closing_date IS NULL AND applied_amount_minor_units IS NULL
+            AND original_expense_id IS NULL)
         OR
         (kind = 'bill_payment' AND account_id IS NOT NULL AND payable_id IS NOT NULL
             AND allocation_id IS NULL AND source_account_id IS NULL
             AND destination_account_id IS NULL AND related_transfer_id IS NULL
             AND card_id IS NULL AND invoice_closing_date IS NULL
-            AND applied_amount_minor_units IS NULL)
+            AND applied_amount_minor_units IS NULL AND original_expense_id IS NULL)
         OR
         (kind = 'invoice_payment' AND account_id IS NOT NULL AND card_id IS NOT NULL
             AND invoice_closing_date IS NOT NULL
@@ -92,7 +98,14 @@ financial_movements = Table(
             AND applied_amount_minor_units <= amount_minor_units
             AND allocation_id IS NULL AND source_account_id IS NULL
             AND destination_account_id IS NULL AND related_transfer_id IS NULL
-            AND payable_id IS NULL)
+            AND payable_id IS NULL AND original_expense_id IS NULL)
+        OR
+        (kind = 'account_expense_refund' AND account_id IS NOT NULL
+            AND original_expense_id IS NOT NULL AND allocation_id IS NULL
+            AND source_account_id IS NULL AND destination_account_id IS NULL
+            AND related_transfer_id IS NULL AND payable_id IS NULL
+            AND card_id IS NULL AND invoice_closing_date IS NULL
+            AND applied_amount_minor_units IS NULL)
         """,
         name="ck_financial_movement_shape",
     ),
@@ -120,17 +133,19 @@ class SqlAlchemyFinancialMovementRepository:
             "card_id": None,
             "invoice_closing_date": None,
             "applied_amount_minor_units": None,
+            "original_expense_id": None,
             "effective_date": movement.metadata.effective_date,
             "recorded_at": movement.metadata.recorded_at.isoformat(),
             "origin": movement.metadata.origin.value,
         }
-        if isinstance(movement, InvoicePayment):
+        if isinstance(movement, AccountExpenseRefund):
+            values["account_id"] = str(movement.account_id)
+            values["original_expense_id"] = str(movement.original_expense_id)
+        elif isinstance(movement, InvoicePayment):
             values["account_id"] = str(movement.account_id)
             values["card_id"] = str(movement.card_id)
             values["invoice_closing_date"] = movement.invoice_closing_date
-            values["applied_amount_minor_units"] = money_to_minor_units(
-                movement.applied_amount
-            )
+            values["applied_amount_minor_units"] = money_to_minor_units(movement.applied_amount)
         elif isinstance(movement, BillPayment):
             values["account_id"] = str(movement.account_id)
             values["payable_id"] = str(movement.payable_id)
@@ -145,6 +160,14 @@ class SqlAlchemyFinancialMovementRepository:
         self._session.execute(insert(financial_movements).values(values))
 
     def get(self, movement_id: UUID) -> FinancialMovement | None:
+        original = self.get_recorded(movement_id)
+        if original is None:
+            return None
+        from bot_financeiro.persistence.financial_changes import current_financial_fact
+
+        return current_financial_fact(self._session, original)
+
+    def get_recorded(self, movement_id: UUID) -> FinancialMovement | None:
         row = (
             self._session.execute(
                 select(financial_movements).where(financial_movements.c.id == str(movement_id))
@@ -155,6 +178,15 @@ class SqlAlchemyFinancialMovementRepository:
         return None if row is None else self._movement(row)
 
     def list_all(self) -> tuple[FinancialMovement, ...]:
+        from bot_financeiro.persistence.financial_changes import current_financial_fact
+
+        return tuple(
+            current
+            for original in self.list_recorded()
+            if (current := current_financial_fact(self._session, original)) is not None
+        )
+
+    def list_recorded(self) -> tuple[FinancialMovement, ...]:
         rows = self._session.execute(
             select(financial_movements).order_by(
                 financial_movements.c.effective_date,
@@ -172,6 +204,13 @@ class SqlAlchemyFinancialMovementRepository:
             record_id=UUID(row["id"]),
         )
         amount = money_from_minor_units(row["amount_minor_units"], row["currency"])
+        if row["kind"] == "account_expense_refund":
+            return AccountExpenseRefund(
+                original_expense_id=UUID(row["original_expense_id"]),
+                account_id=UUID(row["account_id"]),
+                amount=amount,
+                metadata=movement_metadata,
+            )
         if row["kind"] == "invoice_payment":
             return InvoicePayment(
                 card_id=UUID(row["card_id"]),
@@ -206,9 +245,7 @@ class SqlAlchemyFinancialMovementRepository:
             return Income(account_id=UUID(row["account_id"]), allocation=allocation)
         if row["kind"] == "cash_expense":
             related_transfer_id = (
-                None
-                if row["related_transfer_id"] is None
-                else UUID(row["related_transfer_id"])
+                None if row["related_transfer_id"] is None else UUID(row["related_transfer_id"])
             )
             if related_transfer_id is not None:
                 self._require_transfer_reference(related_transfer_id)
@@ -221,15 +258,15 @@ class SqlAlchemyFinancialMovementRepository:
 
     def _require_transfer_reference(self, movement_id: UUID) -> None:
         kind = self._session.scalar(
-            select(financial_movements.c.kind).where(
-                financial_movements.c.id == str(movement_id)
-            )
+            select(financial_movements.c.kind).where(financial_movements.c.id == str(movement_id))
         )
         if kind != "transfer":
             raise ValueError("transfer fee must reference a transfer")
 
     @staticmethod
     def _kind(movement: FinancialMovement) -> str:
+        if isinstance(movement, AccountExpenseRefund):
+            return "account_expense_refund"
         if isinstance(movement, InvoicePayment):
             return "invoice_payment"
         if isinstance(movement, BillPayment):

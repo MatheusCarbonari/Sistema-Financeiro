@@ -8,6 +8,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from bot_financeiro.domain.audit import RecordMetadata
 from bot_financeiro.domain.categories import Allocation, CategoryCatalog, FinancialNature
+from bot_financeiro.domain.financial_changes import AccountEffect, DebtEffect
 from bot_financeiro.domain.money import CurrencyMismatchError, Money
 from bot_financeiro.domain.movements import InvoicePayment
 from bot_financeiro.domain.resource_account import AccountHistoryEntryKind, ResourceAccount
@@ -46,6 +47,7 @@ class CardPurchase:
     card_id: UUID
     allocation: Allocation
     invoice_closing_date: date
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
@@ -55,7 +57,7 @@ class CardPurchase:
 
     @property
     def purchase_id(self) -> UUID:
-        return self.allocation.allocation_id
+        return self.original_event_id or self.allocation.allocation_id
 
     @property
     def event_id(self) -> UUID:
@@ -66,8 +68,29 @@ class CardPurchase:
         return self.allocation.total
 
     @property
+    def metadata(self) -> RecordMetadata:
+        return self.allocation.metadata
+
+    @property
     def is_expense(self) -> bool:
         return True
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return ()
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return (DebtEffect(self.card_id, self.amount),)
+
+    def ensure_correction_of(
+        self, original: CardPurchase, catalog: CategoryCatalog
+    ) -> None:
+        if self.card_id != original.card_id:
+            raise ValueError("card purchase correction must preserve its card")
+        if self.invoice_closing_date != original.invoice_closing_date:
+            raise ValueError("invoice assignment corrections require their specific proposal")
+        self.allocation.ensure_categories_compatible(catalog, require_active=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,8 +145,20 @@ class InstallmentPurchase:
         return self.allocation.total
 
     @property
+    def metadata(self) -> RecordMetadata:
+        return self.allocation.metadata
+
+    @property
     def is_expense(self) -> bool:
         return True
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return ()
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return (DebtEffect(self.card_id, self.amount),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +201,14 @@ class InstallmentPurchaseCorrected:
 
 
 @dataclass(frozen=True, slots=True)
+class InstallmentPurchaseCorrectionAssessment:
+    previous_installments: tuple[Installment, ...]
+    frozen_installments: tuple[Installment, ...]
+    replacement_installments: tuple[Installment, ...]
+    blockers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class InvoiceAssignmentCorrected:
     card_id: UUID
     purchase_id: UUID
@@ -186,10 +229,17 @@ class InvoiceAssignmentCorrected:
 
 
 @dataclass(frozen=True, slots=True)
+class InvoiceAssignmentCorrectionAssessment:
+    previous_closing_date: date
+    target_closing_date: date
+
+
+@dataclass(frozen=True, slots=True)
 class InvoiceFinancialCharge:
     card_id: UUID
     invoice_closing_date: date
     allocation: Allocation
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
@@ -199,15 +249,37 @@ class InvoiceFinancialCharge:
 
     @property
     def event_id(self) -> UUID:
-        return self.allocation.allocation_id
+        return self.original_event_id or self.allocation.allocation_id
 
     @property
     def amount(self) -> Money:
         return self.allocation.total
 
     @property
+    def metadata(self) -> RecordMetadata:
+        return self.allocation.metadata
+
+    @property
     def is_expense(self) -> bool:
         return True
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return ()
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return (DebtEffect(self.card_id, self.amount),)
+
+    def ensure_correction_of(
+        self, original: InvoiceFinancialCharge, catalog: CategoryCatalog
+    ) -> None:
+        if (
+            self.card_id != original.card_id
+            or self.invoice_closing_date != original.invoice_closing_date
+        ):
+            raise ValueError("invoice charge correction must preserve card and invoice")
+        self.allocation.ensure_categories_compatible(catalog, require_active=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,6 +598,41 @@ class CreditCard:
         metadata: RecordMetadata,
         catalog: CategoryCatalog,
     ) -> tuple[InstallmentPurchaseCorrected, CreditCard]:
+        assessment = self.assess_installment_purchase_correction(
+            purchase_id=purchase_id,
+            corrected_allocation=corrected_allocation,
+            remaining_installment_count=remaining_installment_count,
+            reason=reason,
+            effective_date=metadata.effective_date,
+            catalog=catalog,
+        )
+        if assessment.blockers:
+            raise ValueError(
+                "installment purchase correction is blocked: "
+                + "; ".join(assessment.blockers)
+            )
+        correction = InstallmentPurchaseCorrected(
+            card_id=self.card_id,
+            purchase_id=purchase_id,
+            corrected_allocation=corrected_allocation,
+            previous_installments=assessment.previous_installments,
+            frozen_installments=assessment.frozen_installments,
+            replacement_installments=assessment.replacement_installments,
+            reason=reason.strip(),
+            metadata=metadata,
+        )
+        return correction, replace(self, history=(*self.history, correction))
+
+    def assess_installment_purchase_correction(
+        self,
+        *,
+        purchase_id: UUID,
+        corrected_allocation: Allocation,
+        remaining_installment_count: int,
+        reason: str,
+        effective_date: date,
+        catalog: CategoryCatalog,
+    ) -> InstallmentPurchaseCorrectionAssessment:
         self._installment_purchase(purchase_id)
         corrected_allocation.ensure_categories_compatible(catalog, require_active=True)
         if corrected_allocation.nature is not FinancialNature.EXPENSE:
@@ -533,11 +640,23 @@ class CreditCard:
         self._require_currency(corrected_allocation.total)
         current, previous_open, frozen = self._installment_partition_for_correction(
             purchase_id=purchase_id,
-            on_date=metadata.effective_date,
+            on_date=effective_date,
         )
         frozen_total = self._installment_total(frozen)
+        if not previous_open:
+            return InstallmentPurchaseCorrectionAssessment(
+                previous_installments=(),
+                frozen_installments=frozen,
+                replacement_installments=(),
+                blockers=("installment purchase has no open installments to correct",),
+            )
         if corrected_allocation.total < frozen_total:
-            raise ValueError("corrected total cannot be lower than frozen installments")
+            return InstallmentPurchaseCorrectionAssessment(
+                previous_installments=previous_open,
+                frozen_installments=frozen,
+                replacement_installments=(),
+                blockers=("corrected total cannot be lower than frozen installments",),
+            )
         remaining = Money(
             corrected_allocation.total.amount - frozen_total.amount,
             self.currency,
@@ -556,7 +675,7 @@ class CreditCard:
             current=current,
             frozen=frozen,
             count=remaining_installment_count,
-            on_date=metadata.effective_date,
+            on_date=effective_date,
         )
         next_sequence = max(item.sequence for item in current) + 1
         replacement = tuple(
@@ -568,18 +687,11 @@ class CreditCard:
             )
             for index, (amount, cycle) in enumerate(zip(amounts, cycles, strict=True))
         )
-        correction = InstallmentPurchaseCorrected(
-            card_id=self.card_id,
-            purchase_id=purchase_id,
-            corrected_allocation=corrected_allocation,
+        return InstallmentPurchaseCorrectionAssessment(
             previous_installments=previous_open,
             frozen_installments=frozen,
             replacement_installments=replacement,
-            reason=reason.strip(),
-            metadata=metadata,
         )
-        updated = replace(self, history=(*self.history, correction))
-        return correction, updated
 
     def correct_invoice_assignment(
         self,
@@ -589,6 +701,26 @@ class CreditCard:
         reason: str,
         metadata: RecordMetadata,
     ) -> tuple[InvoiceAssignmentCorrected, CreditCard]:
+        assessment = self.assess_invoice_assignment_correction(
+            purchase_id=purchase_id,
+            target_closing_date=target_closing_date,
+        )
+        correction = InvoiceAssignmentCorrected(
+            card_id=self.card_id,
+            purchase_id=purchase_id,
+            previous_closing_date=assessment.previous_closing_date,
+            target_closing_date=assessment.target_closing_date,
+            reason=reason.strip(),
+            metadata=metadata,
+        )
+        return correction, replace(self, history=(*self.history, correction))
+
+    def assess_invoice_assignment_correction(
+        self,
+        *,
+        purchase_id: UUID,
+        target_closing_date: date,
+    ) -> InvoiceAssignmentCorrectionAssessment:
         purchase = self._purchase(purchase_id)
         current_closing_date = self._purchase_closing_date(purchase)
         expected_closing_date = _day_in_month(
@@ -598,15 +730,10 @@ class CreditCard:
         )
         if target_closing_date != expected_closing_date:
             raise ValueError("target date is not a valid invoice closing date")
-        correction = InvoiceAssignmentCorrected(
-            card_id=self.card_id,
-            purchase_id=purchase_id,
+        return InvoiceAssignmentCorrectionAssessment(
             previous_closing_date=current_closing_date,
             target_closing_date=target_closing_date,
-            reason=reason.strip(),
-            metadata=metadata,
         )
-        return correction, replace(self, history=(*self.history, correction))
 
     def pay_invoice(
         self,
@@ -685,7 +812,12 @@ class CreditCard:
         amount: Money,
         metadata: RecordMetadata,
     ) -> tuple[CardRefund, CreditCard]:
-        purchase = self._purchase(purchase_id)
+        try:
+            purchase = self._purchase(purchase_id)
+            current_expense = purchase.amount
+        except LookupError:
+            purchase = self._installment_purchase(purchase_id)
+            current_expense = self.expense_for_purchase(purchase_id).total
         self._require_currency(amount)
         if amount.amount <= 0:
             raise ValueError("card refund amount must be positive")
@@ -693,8 +825,48 @@ class CreditCard:
         for event in self.history:
             if isinstance(event, CardRefund) and event.purchase_id == purchase_id:
                 already_refunded += event.amount
-        if already_refunded + amount > purchase.amount:
+        if already_refunded + amount > current_expense:
             raise ValueError("card refund cannot exceed purchase amount")
+        if isinstance(purchase, InstallmentPurchase):
+            refund = CardRefund(
+                card_id=self.card_id,
+                purchase_id=purchase_id,
+                amount=amount,
+                principal_reduction=Money("0", self.currency),
+                metadata=metadata,
+            )
+            credit = self._credit_granted(
+                amount=amount,
+                source_event_id=refund.event_id,
+                reason="installment purchase refund",
+                metadata=metadata,
+            )
+            updated = replace(self, history=(*self.history, refund, credit))
+            remaining = amount
+            for invoice in updated.invoices():
+                if remaining.amount == 0:
+                    break
+                applied_amount = Money(
+                    min(remaining.amount, invoice.amount_due.amount), self.currency
+                )
+                if applied_amount.amount == 0:
+                    continue
+                applied_metadata = replace(
+                    metadata,
+                    record_id=uuid5(
+                        NAMESPACE_URL,
+                        f"installment-refund:{refund.event_id}:{invoice.cycle.closing_date}",
+                    ),
+                )
+                _, updated = updated.apply_card_credit(
+                    closing_date=invoice.cycle.closing_date,
+                    amount=applied_amount,
+                    metadata=applied_metadata,
+                )
+                remaining = Money(
+                    remaining.amount - applied_amount.amount, self.currency
+                )
+            return refund, updated
         closing_date = self._purchase_closing_date(purchase)
         principal_due = self.invoice(closing_date).principal_due
         principal_reduction = Money(
@@ -777,6 +949,80 @@ class CreditCard:
         ):
             raise ValueError("persisted credit card history is immutable")
 
+    def ensure_invoice_payment_change_allowed(
+        self,
+        payment: InvoicePayment,
+        proposed_applied_amount: Money,
+    ) -> None:
+        if any(
+            isinstance(event, CardCreditGranted)
+            and event.source_event_id == payment.event_id
+            for event in self.history
+        ):
+            raise ValueError("invoice payment has linked card credit")
+        invoice = self.invoice(payment.invoice_closing_date)
+        recalculated = Money(
+            invoice.amount_due.amount
+            + payment.applied_amount.amount
+            - proposed_applied_amount.amount,
+            invoice.amount_due.currency,
+        )
+        if recalculated.amount < 0:
+            raise ValueError("corrected payment exceeds the invoice debt")
+
+    def ensure_financial_fact_change_allowed(
+        self,
+        fact: CardPurchase | InstallmentPurchase | InvoiceFinancialCharge,
+    ) -> None:
+        closing_dates = (
+            {item.cycle.closing_date for item in fact.installments}
+            if isinstance(fact, InstallmentPurchase)
+            else {fact.invoice_closing_date}
+        )
+        if any(
+            isinstance(event, (InvoicePayment, CardCreditApplied))
+            and event.invoice_closing_date in closing_dates
+            for event in self.history
+        ):
+            raise ValueError("card debt has settlement dependencies")
+        if isinstance(fact, InstallmentPurchase) and any(
+            isinstance(event, InstallmentPurchaseCorrected)
+            and event.purchase_id == fact.purchase_id
+            for event in self.history
+        ):
+            raise ValueError("installment purchase already has correction dependencies")
+        if isinstance(fact, CardPurchase) and any(
+            isinstance(event, CardRefund) and event.purchase_id == fact.purchase_id
+            for event in self.history
+        ):
+            raise ValueError("card purchase already has refunds")
+        if isinstance(fact, CardPurchase) and any(
+            isinstance(event, InvoiceAssignmentCorrected)
+            and event.purchase_id == fact.purchase_id
+            for event in self.history
+        ):
+            raise ValueError("card purchase has an invoice assignment dependency")
+
+    def ensure_invoice_assignment_change_allowed(
+        self,
+        *,
+        purchase_id: UUID,
+        previous_closing_date: date,
+        target_closing_date: date,
+    ) -> None:
+        affected_cycles = {previous_closing_date, target_closing_date}
+        if any(
+            isinstance(event, (InvoicePayment, CardCreditApplied))
+            and event.invoice_closing_date in affected_cycles
+            for event in self.history
+        ):
+            raise ValueError("invoice assignment has settlement dependencies")
+        if any(
+            isinstance(event, CardRefund) and event.purchase_id == purchase_id
+            for event in self.history
+        ):
+            raise ValueError("card purchase already has refunds")
+
     def cycle_for(self, purchase_date: date) -> InvoiceCycle:
         closing_date = _day_in_month(
             purchase_date.year,
@@ -833,8 +1079,8 @@ class CreditCard:
                 principal += event.amount
             elif (
                 isinstance(event, CardRefund)
-                and self._purchase_closing_date(self._purchase(event.purchase_id))
-                == closing_date
+                and event.principal_reduction.amount > 0
+                and self._purchase_closing_date(self._purchase(event.purchase_id)) == closing_date
             ):
                 if event.principal_reduction > principal:
                     raise ValueError("card refund exceeds principal due")
@@ -1054,6 +1300,7 @@ class CreditCard:
         if count == 0:
             return ()
         frozen_dates = {item.cycle.closing_date for item in frozen}
+        current_dates = {item.cycle.closing_date for item in current}
         candidate = open_installments[0].cycle
         cycles: list[InvoiceCycle] = []
         while len(cycles) < count:
@@ -1063,7 +1310,10 @@ class CreditCard:
             )
             if (
                 candidate.closing_date not in frozen_dates
-                and invoice.status_on(on_date) is InvoiceStatus.OPEN
+                and (
+                    candidate.closing_date not in current_dates
+                    or invoice.status_on(on_date) is InvoiceStatus.OPEN
+                )
             ):
                 cycles.append(candidate)
             year, month = _next_month(
@@ -1269,17 +1519,18 @@ class CreditCard:
                 )
                 assignment[event.purchase_id] = event.target_closing_date
             elif isinstance(event, CardRefund):
-                closing_date = assignment[event.purchase_id]
-                principal_by_invoice[closing_date] = Money(
-                    principal_by_invoice[closing_date].amount
-                    - event.principal_reduction.amount,
-                    self.currency,
-                )
-                purchase_remaining[event.purchase_id] = Money(
-                    purchase_remaining[event.purchase_id].amount
-                    - event.principal_reduction.amount,
-                    self.currency,
-                )
+                if event.purchase_id in assignment:
+                    closing_date = assignment[event.purchase_id]
+                    principal_by_invoice[closing_date] = Money(
+                        principal_by_invoice[closing_date].amount
+                        - event.principal_reduction.amount,
+                        self.currency,
+                    )
+                    purchase_remaining[event.purchase_id] = Money(
+                        purchase_remaining[event.purchase_id].amount
+                        - event.principal_reduction.amount,
+                        self.currency,
+                    )
             elif isinstance(event, (InvoicePayment, CardCreditApplied)):
                 settlement = (
                     event.applied_amount

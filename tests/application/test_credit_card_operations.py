@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from bot_financeiro.application.credit_cards import CreditCardOperations
+from bot_financeiro.application.financial_changes import FinancialChangeOperations
 from bot_financeiro.application.financial_operations import FinancialOperations
 from bot_financeiro.domain.audit import RecordMetadata, RecordOrigin
 from bot_financeiro.domain.categories import (
@@ -22,6 +23,9 @@ from bot_financeiro.domain.resource_account import AccountType, ResourceAccount
 from bot_financeiro.persistence.categories import SqlAlchemyFinancialCategoryRepository
 from bot_financeiro.persistence.credit_cards import SqlAlchemyCreditCardUnitOfWork
 from bot_financeiro.persistence.database import create_sqlite_engine
+from bot_financeiro.persistence.financial_change_unit_of_work import (
+    SqlAlchemyFinancialChangeUnitOfWork,
+)
 from bot_financeiro.persistence.financial_operations import (
     SqlAlchemyFinancialOperationUnitOfWork,
 )
@@ -97,6 +101,9 @@ def test_credit_card_purchase_is_persisted_as_expense_and_debt_without_account_e
 
 def test_installment_purchase_and_correction_round_trip_without_moving_account() -> None:
     operations, finances, account, catalog, category_id, engine = configured_scenario()
+    changes = FinancialChangeOperations(
+        lambda: SqlAlchemyFinancialChangeUnitOfWork(sessionmaker(bind=engine))
+    )
     card = operations.create_card(
         name="Cartão principal",
         currency="BRL",
@@ -119,7 +126,7 @@ def test_installment_purchase_and_correction_round_trip_without_moving_account()
     )
     corrected_amount = Money("123.00", "BRL")
 
-    operations.correct_installment_purchase(
+    proposal = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
         corrected_allocation=Allocation.create(
@@ -131,7 +138,11 @@ def test_installment_purchase_and_correction_round_trip_without_moving_account()
         ),
         remaining_installment_count=2,
         reason="Valor final da compra",
-        metadata=metadata("408d66ec-c819-4870-ab5a-88cbce81fcdd", day=11),
+        effective_date=date(2026, 9, 11),
+    )
+    changes.confirm_installment_purchase_correction(
+        proposal,
+        metadata("408d66ec-c819-4870-ab5a-88cbce81fcdd", day=11),
     )
 
     restored = operations.get_card(card.card_id)
@@ -350,7 +361,10 @@ def test_invoice_payment_rolls_back_all_effects_when_account_save_fails() -> Non
 
 
 def test_card_history_round_trips_correction_charge_refund_and_credit_application() -> None:
-    operations, _, _, catalog, category_id, _ = configured_scenario()
+    operations, _, _, catalog, category_id, engine = configured_scenario()
+    changes = FinancialChangeOperations(
+        lambda: SqlAlchemyFinancialChangeUnitOfWork(sessionmaker(bind=engine))
+    )
     card = operations.create_card(
         name="Cartão principal",
         currency="BRL",
@@ -370,12 +384,16 @@ def test_card_history_round_trips_correction_charge_refund_and_credit_applicatio
             metadata=metadata("16a69845-3d37-46f1-a0c7-330bb0b14c77", day=9),
         ),
     )
-    operations.correct_invoice_assignment(
+    assignment = changes.preview_invoice_assignment_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
         target_closing_date=date(2026, 10, 10),
         reason="Fatura real da operadora",
-        metadata=metadata("8b9ddcca-340c-4fb3-a2ec-b07c3d265e4d", day=11),
+        effective_date=date(2026, 9, 11),
+    )
+    changes.confirm_invoice_assignment_correction(
+        assignment,
+        metadata("8b9ddcca-340c-4fb3-a2ec-b07c3d265e4d", day=11),
     )
     charge_amount = Money("20.00", "BRL")
     operations.add_financial_charge(
@@ -389,10 +407,13 @@ def test_card_history_round_trips_correction_charge_refund_and_credit_applicatio
             metadata=metadata("57314fcb-5de6-4462-a4d3-a1424cb0887b", day=12),
         ),
     )
-    operations.record_refund(
+    refund = changes.preview_card_refund(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
         amount=Money("30.00", "BRL"),
+    )
+    changes.confirm_card_refund(
+        refund,
         metadata=metadata("619502c6-536a-4432-996e-bf5ce21e753f", day=13),
     )
     operations.grant_card_credit(

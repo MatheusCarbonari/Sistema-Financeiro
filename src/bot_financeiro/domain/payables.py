@@ -7,6 +7,7 @@ from uuid import UUID
 
 from bot_financeiro.domain.audit import RecordMetadata
 from bot_financeiro.domain.categories import Allocation, CategoryCatalog, FinancialNature
+from bot_financeiro.domain.financial_changes import AccountEffect, DebtEffect
 from bot_financeiro.domain.money import Money
 from bot_financeiro.domain.movements import BillPayment
 from bot_financeiro.domain.resource_account import AccountHistoryEntryKind, ResourceAccount
@@ -23,6 +24,7 @@ class PayableStatus(StrEnum):
 class PayableOpened:
     allocation: Allocation
     due_date: date
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
@@ -32,17 +34,40 @@ class PayableOpened:
 
     @property
     def event_id(self) -> UUID:
-        return self.allocation.allocation_id
+        return self.original_event_id or self.allocation.allocation_id
+
+    @property
+    def amount(self) -> Money:
+        return self.allocation.total
+
+    @property
+    def metadata(self) -> RecordMetadata:
+        return self.allocation.metadata
 
     @property
     def is_expense(self) -> bool:
         return True
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return ()
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return (DebtEffect(self.event_id, self.amount),)
+
+    def ensure_correction_of(
+        self, original: PayableOpened, catalog: CategoryCatalog
+    ) -> None:
+        del original
+        self.allocation.ensure_categories_compatible(catalog, require_active=True)
 
 
 @dataclass(frozen=True, slots=True)
 class FinancialCharge:
     payable_id: UUID
     allocation: Allocation
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
@@ -52,20 +77,40 @@ class FinancialCharge:
 
     @property
     def event_id(self) -> UUID:
-        return self.allocation.allocation_id
+        return self.original_event_id or self.allocation.allocation_id
 
     @property
     def amount(self) -> Money:
         return self.allocation.total
 
     @property
+    def metadata(self) -> RecordMetadata:
+        return self.allocation.metadata
+
+    @property
     def is_expense(self) -> bool:
         return True
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return ()
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return (DebtEffect(self.payable_id, self.amount),)
+
+    def ensure_correction_of(
+        self, original: FinancialCharge, catalog: CategoryCatalog
+    ) -> None:
+        if self.payable_id != original.payable_id:
+            raise ValueError("financial charge correction must preserve its payable")
+        self.allocation.ensure_categories_compatible(catalog, require_active=True)
 
 
 @dataclass(frozen=True, slots=True)
 class Payable:
     history: tuple[PayableOpened | BillPayment | FinancialCharge, ...]
+    identity: UUID | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.history, tuple) or not self.history:
@@ -93,11 +138,14 @@ class Payable:
         catalog: CategoryCatalog,
     ) -> Payable:
         allocation.ensure_categories_compatible(catalog, require_active=True)
-        return cls(history=(PayableOpened(allocation=allocation, due_date=due_date),))
+        return cls(
+            history=(PayableOpened(allocation=allocation, due_date=due_date),),
+            identity=allocation.allocation_id,
+        )
 
     @property
     def payable_id(self) -> UUID:
-        return self.history[0].event_id
+        return self.identity or self.history[0].event_id
 
     @property
     def original_amount(self) -> Money:
@@ -169,6 +217,32 @@ class Payable:
             or self.history[:previous_size] != previous.history
         ):
             raise ValueError("persisted payable history is immutable")
+
+    def ensure_payment_change_allowed(
+        self,
+        *,
+        original_amount: Money,
+        proposed_amount: Money,
+    ) -> None:
+        recalculated = Money(
+            self.amount_due.amount + original_amount.amount - proposed_amount.amount,
+            self.amount_due.currency,
+        )
+        if recalculated.amount < 0:
+            raise ValueError("corrected payment exceeds the payable debt")
+
+    def ensure_debt_fact_change_allowed(
+        self,
+        *,
+        original_amount: Money,
+        proposed_amount: Money,
+    ) -> None:
+        recalculated = Money(
+            self.amount_due.amount - original_amount.amount + proposed_amount.amount,
+            self.amount_due.currency,
+        )
+        if recalculated.amount < 0:
+            raise ValueError("change would invalidate payments already consumed by the payable")
 
     def status_on(self, on_date: date) -> PayableStatus:
         if self.amount_due.amount == 0:

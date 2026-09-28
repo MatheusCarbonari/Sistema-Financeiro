@@ -6,6 +6,7 @@ from uuid import UUID
 
 from bot_financeiro.domain.audit import RecordMetadata
 from bot_financeiro.domain.categories import Allocation, CategoryCatalog, FinancialNature
+from bot_financeiro.domain.financial_changes import AccountEffect, AccountExpenseRefund, DebtEffect
 from bot_financeiro.domain.money import CurrencyMismatchError, Money
 from bot_financeiro.domain.resource_account import AccountHistoryEntryKind, ResourceAccount
 
@@ -19,6 +20,7 @@ def _require_positive(amount: Money) -> None:
 class Income:
     account_id: UUID
     allocation: Allocation
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.INCOME:
@@ -27,7 +29,11 @@ class Income:
 
     @property
     def movement_id(self) -> UUID:
-        return self.allocation.allocation_id
+        return self.original_event_id or self.allocation.allocation_id
+
+    @property
+    def event_id(self) -> UUID:
+        return self.movement_id
 
     @property
     def amount(self) -> Money:
@@ -44,6 +50,14 @@ class Income:
     @property
     def is_expense(self) -> bool:
         return False
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return (AccountEffect(self.account_id, self.amount),)
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return ()
 
     @classmethod
     def receive(
@@ -62,12 +76,16 @@ class Income:
         )
         return income, updated_account
 
+    def ensure_correction_of(self, original: Income, catalog: CategoryCatalog) -> None:
+        self.allocation.ensure_categories_compatible(catalog, require_active=True)
+
 
 @dataclass(frozen=True, slots=True)
 class CashExpense:
     account_id: UUID
     allocation: Allocation
     related_transfer_id: UUID | None = None
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
@@ -76,7 +94,11 @@ class CashExpense:
 
     @property
     def movement_id(self) -> UUID:
-        return self.allocation.allocation_id
+        return self.original_event_id or self.allocation.allocation_id
+
+    @property
+    def event_id(self) -> UUID:
+        return self.movement_id
 
     @property
     def amount(self) -> Money:
@@ -93,6 +115,19 @@ class CashExpense:
     @property
     def is_expense(self) -> bool:
         return True
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return (
+            AccountEffect(
+                self.account_id,
+                Money(-self.amount.amount, self.amount.currency),
+            ),
+        )
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return ()
 
     @classmethod
     def pay(
@@ -118,6 +153,13 @@ class CashExpense:
         )
         return expense, updated_account
 
+    def ensure_correction_of(
+        self, original: CashExpense, catalog: CategoryCatalog
+    ) -> None:
+        if self.related_transfer_id != original.related_transfer_id:
+            raise ValueError("a transfer fee remains linked to its original transfer")
+        self.allocation.ensure_categories_compatible(catalog, require_active=True)
+
 
 @dataclass(frozen=True, slots=True)
 class Transfer:
@@ -125,6 +167,7 @@ class Transfer:
     destination_account_id: UUID
     amount: Money
     metadata: RecordMetadata
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.source_account_id == self.destination_account_id:
@@ -133,7 +176,11 @@ class Transfer:
 
     @property
     def movement_id(self) -> UUID:
-        return self.metadata.record_id
+        return self.original_event_id or self.metadata.record_id
+
+    @property
+    def event_id(self) -> UUID:
+        return self.movement_id
 
     @property
     def is_income(self) -> bool:
@@ -142,6 +189,20 @@ class Transfer:
     @property
     def is_expense(self) -> bool:
         return False
+
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return (
+            AccountEffect(
+                self.source_account_id,
+                Money(-self.amount.amount, self.amount.currency),
+            ),
+            AccountEffect(self.destination_account_id, self.amount),
+        )
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return ()
 
     @classmethod
     def execute(
@@ -172,6 +233,9 @@ class Transfer:
         )
         return transfer, updated_source, updated_destination
 
+    def ensure_correction_of(self, original: Transfer, catalog: CategoryCatalog) -> None:
+        del original, catalog
+
 
 @dataclass(frozen=True, slots=True)
 class BillPayment:
@@ -179,13 +243,14 @@ class BillPayment:
     account_id: UUID
     amount: Money
     metadata: RecordMetadata
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         _require_positive(self.amount)
 
     @property
     def movement_id(self) -> UUID:
-        return self.metadata.record_id
+        return self.original_event_id or self.metadata.record_id
 
     @property
     def event_id(self) -> UUID:
@@ -199,6 +264,31 @@ class BillPayment:
     def is_expense(self) -> bool:
         return False
 
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return (
+            AccountEffect(
+                self.account_id,
+                Money(-self.amount.amount, self.amount.currency),
+            ),
+        )
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return (
+            DebtEffect(
+                self.payable_id,
+                Money(-self.amount.amount, self.amount.currency),
+            ),
+        )
+
+    def ensure_correction_of(
+        self, original: BillPayment, catalog: CategoryCatalog
+    ) -> None:
+        del catalog
+        if self.payable_id != original.payable_id:
+            raise ValueError("bill payment correction must preserve its payable")
+
 
 @dataclass(frozen=True, slots=True)
 class InvoicePayment:
@@ -208,6 +298,7 @@ class InvoicePayment:
     amount: Money
     applied_amount: Money
     metadata: RecordMetadata
+    original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         _require_positive(self.amount)
@@ -220,7 +311,7 @@ class InvoicePayment:
 
     @property
     def movement_id(self) -> UUID:
-        return self.metadata.record_id
+        return self.original_event_id or self.metadata.record_id
 
     @property
     def event_id(self) -> UUID:
@@ -234,5 +325,34 @@ class InvoicePayment:
     def is_expense(self) -> bool:
         return False
 
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return (
+            AccountEffect(
+                self.account_id,
+                Money(-self.amount.amount, self.amount.currency),
+            ),
+        )
 
-FinancialMovement = Income | CashExpense | Transfer | BillPayment | InvoicePayment
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return (
+            DebtEffect(
+                self.card_id,
+                Money(-self.applied_amount.amount, self.applied_amount.currency),
+            ),
+        )
+
+    def ensure_correction_of(
+        self, original: InvoicePayment, catalog: CategoryCatalog
+    ) -> None:
+        del catalog
+        if self.card_id != original.card_id:
+            raise ValueError("invoice payment correction must preserve its card")
+        if self.invoice_closing_date != original.invoice_closing_date:
+            raise ValueError("invoice payment correction must preserve its invoice")
+
+
+FinancialMovement = (
+    Income | CashExpense | Transfer | BillPayment | InvoicePayment | AccountExpenseRefund
+)

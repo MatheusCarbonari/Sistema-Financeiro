@@ -19,12 +19,9 @@ from bot_financeiro.domain.credit_cards import (
     CardCreditApplied,
     CardCreditGranted,
     CardPurchase,
-    CardRefund,
     CreditCard,
     InstallmentPurchase,
-    InstallmentPurchaseCorrected,
     Invoice,
-    InvoiceAssignmentCorrected,
     InvoiceFinancialCharge,
 )
 from bot_financeiro.domain.money import Money
@@ -120,52 +117,6 @@ class CreditCardOperations:
             unit_of_work.commit()
         return purchase
 
-    def correct_installment_purchase(
-        self,
-        *,
-        card_id: UUID,
-        purchase_id: UUID,
-        corrected_allocation: Allocation,
-        remaining_installment_count: int,
-        reason: str,
-        metadata: RecordMetadata,
-    ) -> InstallmentPurchaseCorrected:
-        with self._unit_of_work_factory() as unit_of_work:
-            card = self._card(unit_of_work, card_id)
-            correction, updated = card.correct_installment_purchase(
-                purchase_id=purchase_id,
-                corrected_allocation=corrected_allocation,
-                remaining_installment_count=remaining_installment_count,
-                reason=reason,
-                metadata=metadata,
-                catalog=unit_of_work.categories.catalog(),
-            )
-            unit_of_work.allocations.add(corrected_allocation)
-            unit_of_work.credit_cards.save(updated)
-            unit_of_work.commit()
-        return correction
-
-    def correct_invoice_assignment(
-        self,
-        *,
-        card_id: UUID,
-        purchase_id: UUID,
-        target_closing_date: date,
-        reason: str,
-        metadata: RecordMetadata,
-    ) -> InvoiceAssignmentCorrected:
-        with self._unit_of_work_factory() as unit_of_work:
-            card = self._card(unit_of_work, card_id)
-            correction, updated = card.correct_invoice_assignment(
-                purchase_id=purchase_id,
-                target_closing_date=target_closing_date,
-                reason=reason,
-                metadata=metadata,
-            )
-            unit_of_work.credit_cards.save(updated)
-            unit_of_work.commit()
-        return correction
-
     def pay_invoice(
         self,
         *,
@@ -193,25 +144,6 @@ class CreditCardOperations:
             unit_of_work.accounts.save(updated_account)
             unit_of_work.commit()
         return payment
-
-    def record_refund(
-        self,
-        *,
-        card_id: UUID,
-        purchase_id: UUID,
-        amount: Money,
-        metadata: RecordMetadata,
-    ) -> CardRefund:
-        with self._unit_of_work_factory() as unit_of_work:
-            card = self._card(unit_of_work, card_id)
-            refund, updated = card.refund_purchase(
-                purchase_id=purchase_id,
-                amount=amount,
-                metadata=metadata,
-            )
-            unit_of_work.credit_cards.save(updated)
-            unit_of_work.commit()
-        return refund
 
     def add_financial_charge(
         self,
