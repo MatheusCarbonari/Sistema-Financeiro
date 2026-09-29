@@ -86,6 +86,7 @@ def test_creating_payable_persists_expense_and_debt_without_moving_account_balan
     payables, finances, _ = operations_with(account, catalog)
 
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
     )
@@ -120,12 +121,14 @@ def test_partial_payment_atomically_reduces_payable_and_resource_account() -> No
     )
     payables, finances, _ = operations_with(account, catalog)
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
     )
     payment_metadata = metadata("9d57c2cd-c7be-42a1-bd18-bc7444cadfc0", day=5)
 
     payment = payables.pay_payable(
+        description="Registro de teste",
         payable_id=payable.payable_id,
         account_id=account.account_id,
         amount=Money("100.00", "BRL"),
@@ -178,11 +181,13 @@ def test_financial_charge_is_persisted_as_separate_expense_without_account_movem
     )
     payables, finances, _ = operations_with(account, catalog)
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=principal,
         due_date=date(2026, 9, 10),
     )
 
     charge = payables.add_financial_charge(
+        description="Registro de teste",
         payable_id=payable.payable_id,
         allocation=charge_allocation,
     )
@@ -221,6 +226,7 @@ def test_payment_rolls_back_movement_and_debt_when_account_update_fails() -> Non
     )
     payables, finances, engine = operations_with(account, catalog)
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
     )
@@ -238,6 +244,7 @@ def test_payment_rolls_back_movement_and_debt_when_account_update_fails() -> Non
 
     with pytest.raises(IntegrityError, match="simulated account persistence failure"):
         payables.pay_payable(
+            description="Registro de teste",
             payable_id=payable.payable_id,
             account_id=account.account_id,
             amount=Money("100.00", "BRL"),
@@ -275,10 +282,12 @@ def test_payment_history_must_reconcile_with_its_financial_movement() -> None:
     )
     payables, _, engine = operations_with(account, catalog)
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
     )
     payment = payables.pay_payable(
+        description="Registro de teste",
         payable_id=payable.payable_id,
         account_id=account.account_id,
         amount=Money("100.00", "BRL"),

@@ -31,10 +31,7 @@ def test_migration_0008_adds_and_reverses_financial_change_storage() -> None:
         )
         command.upgrade(config, "0008")
         movement_columns = {
-            row[1]
-            for row in connection.exec_driver_sql(
-                "PRAGMA table_info(financial_movements)"
-            )
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(financial_movements)")
         }
         change_table = connection.exec_driver_sql(
             "SELECT name FROM sqlite_master "
@@ -61,10 +58,7 @@ def test_migration_0008_adds_and_reverses_financial_change_storage() -> None:
 
         command.downgrade(config, "0007")
         restored_columns = {
-            row[1]
-            for row in connection.exec_driver_sql(
-                "PRAGMA table_info(financial_movements)"
-            )
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(financial_movements)")
         }
         removed_table = connection.exec_driver_sql(
             "SELECT name FROM sqlite_master "

@@ -62,6 +62,7 @@ def persisted_payable(engine: Engine) -> Payable:
         metadata=metadata("580472fa-3d7d-4cdd-9272-9106137223d1", day=2),
     )
     payable = Payable.open(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
         catalog=catalog,
@@ -168,9 +169,7 @@ def test_migration_0004_preserves_existing_movements_and_account_history() -> No
 
     with pytest.raises(IntegrityError, match="financial movement history is append-only"):
         with engine.begin() as connection:
-            connection.exec_driver_sql(
-                "UPDATE financial_movements SET amount_minor_units = 1"
-            )
+            connection.exec_driver_sql("UPDATE financial_movements SET amount_minor_units = 1")
 
 
 @pytest.mark.parametrize(

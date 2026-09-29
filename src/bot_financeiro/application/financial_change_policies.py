@@ -35,9 +35,7 @@ class PayableChangePolicy:
             if payable is None:
                 return ("linked payable does not exist",)
             proposed_amount = (
-                Money("0", current.amount.currency)
-                if proposed is None
-                else proposed.amount
+                Money("0", current.amount.currency) if proposed is None else proposed.amount
             )
             try:
                 payable.ensure_payment_change_allowed(
@@ -48,18 +46,12 @@ class PayableChangePolicy:
                 return (str(error),)
         if isinstance(current, (PayableOpened, FinancialCharge)):
             payable_id = (
-                current.event_id
-                if isinstance(current, PayableOpened)
-                else current.payable_id
+                current.event_id if isinstance(current, PayableOpened) else current.payable_id
             )
             payable = context.payables.get(payable_id)
             if payable is None:
                 return ("linked payable does not exist",)
-            after = (
-                Money("0", current.amount.currency)
-                if proposed is None
-                else proposed.amount
-            )
+            after = Money("0", current.amount.currency) if proposed is None else proposed.amount
             try:
                 payable.ensure_debt_fact_change_allowed(
                     original_amount=current.amount,
@@ -108,7 +100,7 @@ def financial_fact_change_blockers(
     )
 
 
-def normalize_financial_fact_replacement(target_id: UUID, replacement):
+def normalize_financial_fact_replacement(target_id: UUID, current, replacement):
     if isinstance(
         replacement,
         (
@@ -123,7 +115,14 @@ def normalize_financial_fact_replacement(target_id: UUID, replacement):
             InvoiceFinancialCharge,
         ),
     ):
-        return replace(replacement, original_event_id=target_id)
+        description = getattr(replacement, "description", None)
+        if description is None:
+            description = getattr(current, "description", None)
+        return replace(
+            replacement,
+            original_event_id=target_id,
+            description=description,
+        )
     if isinstance(replacement, InstallmentPurchase):
         raise ValueError("installment purchase corrections use their specific preview flow")
     return replacement

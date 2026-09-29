@@ -9,6 +9,10 @@ from typing import Self
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from bot_financeiro.domain.audit import RecordMetadata
+from bot_financeiro.domain.descriptions import (
+    normalize_financial_description,
+    validate_persisted_financial_description,
+)
 from bot_financeiro.domain.money import CurrencyMismatchError, Money
 
 
@@ -71,9 +75,7 @@ class SafetyMargin:
         amount = expected.amount * self.percentage_rate / Decimal("100")
         return Money(amount, expected.currency)
 
-    def conservative_impact(
-        self, expected: Money, direction: ForecastDirection
-    ) -> Money:
+    def conservative_impact(self, expected: Money, direction: ForecastDirection) -> Money:
         margin = self.amount_for(expected)
         if direction is ForecastDirection.OUTFLOW:
             return Money(-(expected.amount + margin.amount), expected.currency)
@@ -86,6 +88,7 @@ class OccurrencePlanned:
     expected_amount: Money
     planned_date: date
     margin: SafetyMargin | None
+    description: str | None
     metadata: RecordMetadata
 
 
@@ -94,6 +97,7 @@ class OccurrenceRevised:
     expected_amount: Money
     planned_date: date
     margin: SafetyMargin | None
+    description: str | None
     reason: str
     metadata: RecordMetadata
 
@@ -126,12 +130,14 @@ class PlannedOccurrence:
     margin: SafetyMargin | None
     recurrence_id: UUID | None
     history: tuple[OccurrenceHistoryEntry, ...]
+    description: str | None = None
 
     def __post_init__(self) -> None:
         if self.expected_amount.amount <= 0:
             raise ValueError("forecast amount must be positive")
         if not self.history or not isinstance(self.history[0], OccurrencePlanned):
             raise ValueError("occurrence history must begin with its plan")
+        validate_persisted_financial_description(self.description)
         _validate_margin_currency(self.margin, self.expected_amount)
 
     @property
@@ -185,6 +191,7 @@ class PlannedOccurrence:
         expected_amount: Money,
         planned_date: date,
         margin: SafetyMargin | None,
+        description: str | None = None,
         reason: str,
         metadata: RecordMetadata,
     ) -> Self:
@@ -202,10 +209,16 @@ class PlannedOccurrence:
         if not normalized_reason:
             raise ValueError("occurrence revision reason is required")
         _validate_margin_currency(margin, expected_amount)
+        revised_description = (
+            self.description
+            if description is None
+            else normalize_financial_description(description)
+        )
         event = OccurrenceRevised(
             expected_amount=expected_amount,
             planned_date=planned_date,
             margin=margin,
+            description=revised_description,
             reason=normalized_reason,
             metadata=metadata,
         )
@@ -214,6 +227,7 @@ class PlannedOccurrence:
             expected_amount=expected_amount,
             planned_date=planned_date,
             margin=margin,
+            description=revised_description,
             history=(*self.history, event),
         )
 
@@ -247,16 +261,46 @@ class PlannedOccurrence:
         expected_amount: Money,
         planned_date: date,
         margin: SafetyMargin | None,
+        description: str,
         metadata: RecordMetadata,
         recurrence_id: UUID | None = None,
         occurrence_id: UUID | None = None,
     ) -> Self:
+        normalized_description = normalize_financial_description(description)
+        return cls.restore(
+            account_id=account_id,
+            direction=direction,
+            expected_amount=expected_amount,
+            planned_date=planned_date,
+            margin=margin,
+            description=normalized_description,
+            metadata=metadata,
+            recurrence_id=recurrence_id,
+            occurrence_id=occurrence_id,
+        )
+
+    @classmethod
+    def restore(
+        cls,
+        *,
+        account_id: UUID,
+        direction: ForecastDirection,
+        expected_amount: Money,
+        planned_date: date,
+        margin: SafetyMargin | None,
+        description: str | None,
+        metadata: RecordMetadata,
+        recurrence_id: UUID | None = None,
+        occurrence_id: UUID | None = None,
+    ) -> Self:
+        """Rehydrate persisted planning data, including pre-description records."""
         if planned_date <= metadata.effective_date:
             raise ValueError("forecast date must be in the future when planned")
         event = OccurrencePlanned(
             expected_amount=expected_amount,
             planned_date=planned_date,
             margin=margin,
+            description=description,
             metadata=metadata,
         )
         return cls(
@@ -268,6 +312,7 @@ class PlannedOccurrence:
             margin=margin,
             recurrence_id=recurrence_id,
             history=(event,),
+            description=description,
         )
 
 
@@ -280,6 +325,7 @@ class RecurrenceFrequency(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class RecurrenceCreated:
+    description: str | None
     metadata: RecordMetadata
 
 
@@ -290,6 +336,7 @@ class RecurrenceRevisedFrom:
     margin: SafetyMargin | None
     frequency: RecurrenceFrequency
     interval: int
+    description: str | None
     reason: str
     metadata: RecordMetadata
 
@@ -309,6 +356,7 @@ class Recurrence:
     interval: int
     margin: SafetyMargin | None
     history: tuple[RecurrenceHistoryEntry, ...]
+    description: str | None = None
 
     def __post_init__(self) -> None:
         if self.expected_amount.amount <= 0:
@@ -319,6 +367,7 @@ class Recurrence:
             raise ValueError("recurrence end cannot precede its start")
         if not self.history or not isinstance(self.history[0], RecurrenceCreated):
             raise ValueError("recurrence history must begin with creation")
+        validate_persisted_financial_description(self.description)
         _validate_margin_currency(self.margin, self.expected_amount)
 
     @classmethod
@@ -333,8 +382,39 @@ class Recurrence:
         frequency: RecurrenceFrequency,
         interval: int,
         margin: SafetyMargin | None,
+        description: str,
         metadata: RecordMetadata,
     ) -> Self:
+        normalized_description = normalize_financial_description(description)
+        return cls.restore(
+            account_id=account_id,
+            direction=direction,
+            expected_amount=expected_amount,
+            starts_on=starts_on,
+            ends_on=ends_on,
+            frequency=frequency,
+            interval=interval,
+            margin=margin,
+            description=normalized_description,
+            metadata=metadata,
+        )
+
+    @classmethod
+    def restore(
+        cls,
+        *,
+        account_id: UUID,
+        direction: ForecastDirection,
+        expected_amount: Money,
+        starts_on: date,
+        ends_on: date | None,
+        frequency: RecurrenceFrequency,
+        interval: int,
+        margin: SafetyMargin | None,
+        description: str | None,
+        metadata: RecordMetadata,
+    ) -> Self:
+        """Rehydrate persisted recurrence data, including pre-description records."""
         if starts_on <= metadata.effective_date:
             raise ValueError("recurrence must start in the future when planned")
         return cls(
@@ -347,7 +427,13 @@ class Recurrence:
             frequency=frequency,
             interval=interval,
             margin=margin,
-            history=(RecurrenceCreated(metadata=metadata),),
+            history=(
+                RecurrenceCreated(
+                    description=description,
+                    metadata=metadata,
+                ),
+            ),
+            description=description,
         )
 
     def revise_from(
@@ -358,6 +444,7 @@ class Recurrence:
         margin: SafetyMargin | None,
         frequency: RecurrenceFrequency | None = None,
         interval: int | None = None,
+        description: str | None = None,
         reason: str,
         metadata: RecordMetadata,
     ) -> Self:
@@ -375,12 +462,8 @@ class Recurrence:
             item for item in self.history if isinstance(item, RecurrenceRevisedFrom)
         )
         if previous_revisions:
-            revised_frequency = (
-                previous_revisions[-1].frequency if frequency is None else frequency
-            )
-            revised_interval = (
-                previous_revisions[-1].interval if interval is None else interval
-            )
+            revised_frequency = previous_revisions[-1].frequency if frequency is None else frequency
+            revised_interval = previous_revisions[-1].interval if interval is None else interval
             if from_date <= previous_revisions[-1].from_date:
                 raise ValueError("recurrence revisions must advance the preserved segment")
         if revised_interval < 1:
@@ -389,16 +472,26 @@ class Recurrence:
         if not normalized_reason:
             raise ValueError("recurrence revision reason is required")
         _validate_margin_currency(margin, expected_amount)
+        revised_description = (
+            self.description
+            if description is None
+            else normalize_financial_description(description)
+        )
         event = RecurrenceRevisedFrom(
             from_date=from_date,
             expected_amount=expected_amount,
             margin=margin,
             frequency=revised_frequency,
             interval=revised_interval,
+            description=revised_description,
             reason=normalized_reason,
             metadata=metadata,
         )
-        return replace(self, history=(*self.history, event))
+        return replace(
+            self,
+            description=revised_description,
+            history=(*self.history, event),
+        )
 
     def occurrences_through(self, through_date: date) -> tuple[PlannedOccurrence, ...]:
         created = self.history[0]
@@ -408,10 +501,9 @@ class Recurrence:
         for planned_date in self._scheduled_dates_through(through_date):
             applicable = [entry for entry in revisions if entry.from_date <= planned_date]
             latest = applicable[-1] if applicable else None
-            expected_amount = (
-                self.expected_amount if latest is None else latest.expected_amount
-            )
+            expected_amount = self.expected_amount if latest is None else latest.expected_amount
             margin = self.margin if latest is None else latest.margin
+            description = self.history[0].description if latest is None else latest.description
             source_metadata = created.metadata if latest is None else latest.metadata
             occurrence_id = uuid5(
                 NAMESPACE_URL, f"bot-financeiro:{self.recurrence_id}:{planned_date.isoformat()}"
@@ -421,12 +513,13 @@ class Recurrence:
                 record_id=occurrence_id,
             )
             occurrences.append(
-                PlannedOccurrence.plan(
+                PlannedOccurrence.restore(
                     account_id=self.account_id,
                     direction=self.direction,
                     expected_amount=expected_amount,
                     planned_date=planned_date,
                     margin=margin,
+                    description=description,
                     metadata=occurrence_metadata,
                     recurrence_id=self.recurrence_id,
                     occurrence_id=occurrence_id,
@@ -468,14 +561,10 @@ class Recurrence:
         return tuple(dates)
 
     def _date_at(self, position: int) -> date:
-        return _recurring_date(
-            self.starts_on, self.frequency, self.interval, position
-        )
+        return _recurring_date(self.starts_on, self.frequency, self.interval, position)
 
     def _revisions(self) -> tuple[RecurrenceRevisedFrom, ...]:
-        return tuple(
-            entry for entry in self.history if isinstance(entry, RecurrenceRevisedFrom)
-        )
+        return tuple(entry for entry in self.history if isinstance(entry, RecurrenceRevisedFrom))
 
 
 def _add_months(anchor: date, months: int) -> date:

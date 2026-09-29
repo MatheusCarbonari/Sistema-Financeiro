@@ -6,6 +6,10 @@ from uuid import UUID
 
 from bot_financeiro.domain.audit import RecordMetadata
 from bot_financeiro.domain.categories import Allocation, CategoryCatalog, FinancialNature
+from bot_financeiro.domain.descriptions import (
+    normalize_financial_description,
+    validate_persisted_financial_description,
+)
 from bot_financeiro.domain.financial_changes import AccountEffect, AccountExpenseRefund, DebtEffect
 from bot_financeiro.domain.money import CurrencyMismatchError, Money
 from bot_financeiro.domain.resource_account import AccountHistoryEntryKind, ResourceAccount
@@ -20,11 +24,13 @@ def _require_positive(amount: Money) -> None:
 class Income:
     account_id: UUID
     allocation: Allocation
+    description: str | None = None
     original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.INCOME:
             raise ValueError("income requires an income allocation")
+        validate_persisted_financial_description(self.description)
         _require_positive(self.amount)
 
     @property
@@ -66,9 +72,14 @@ class Income:
         account: ResourceAccount,
         allocation: Allocation,
         catalog: CategoryCatalog,
+        description: str,
     ) -> tuple[Income, ResourceAccount]:
         allocation.ensure_categories_compatible(catalog, require_active=True)
-        income = cls(account_id=account.account_id, allocation=allocation)
+        income = cls(
+            account_id=account.account_id,
+            allocation=allocation,
+            description=normalize_financial_description(description),
+        )
         updated_account = account.record_movement(
             kind=AccountHistoryEntryKind.INCOME,
             difference=income.amount,
@@ -84,12 +95,14 @@ class Income:
 class CashExpense:
     account_id: UUID
     allocation: Allocation
+    description: str | None = None
     related_transfer_id: UUID | None = None
     original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
             raise ValueError("cash expense requires an expense allocation")
+        validate_persisted_financial_description(self.description)
         _require_positive(self.amount)
 
     @property
@@ -136,12 +149,14 @@ class CashExpense:
         account: ResourceAccount,
         allocation: Allocation,
         catalog: CategoryCatalog,
+        description: str,
         related_transfer: Transfer | None = None,
     ) -> tuple[CashExpense, ResourceAccount]:
         allocation.ensure_categories_compatible(catalog, require_active=True)
         expense = cls(
             account_id=account.account_id,
             allocation=allocation,
+            description=normalize_financial_description(description),
             related_transfer_id=(
                 None if related_transfer is None else related_transfer.movement_id
             ),
@@ -153,9 +168,7 @@ class CashExpense:
         )
         return expense, updated_account
 
-    def ensure_correction_of(
-        self, original: CashExpense, catalog: CategoryCatalog
-    ) -> None:
+    def ensure_correction_of(self, original: CashExpense, catalog: CategoryCatalog) -> None:
         if self.related_transfer_id != original.related_transfer_id:
             raise ValueError("a transfer fee remains linked to its original transfer")
         self.allocation.ensure_categories_compatible(catalog, require_active=True)
@@ -167,11 +180,13 @@ class Transfer:
     destination_account_id: UUID
     amount: Money
     metadata: RecordMetadata
+    description: str | None = None
     original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.source_account_id == self.destination_account_id:
             raise ValueError("transfer requires different accounts")
+        validate_persisted_financial_description(self.description)
         _require_positive(self.amount)
 
     @property
@@ -212,6 +227,7 @@ class Transfer:
         destination: ResourceAccount,
         amount: Money,
         metadata: RecordMetadata,
+        description: str,
     ) -> tuple[Transfer, ResourceAccount, ResourceAccount]:
         if source.currency != destination.currency:
             raise CurrencyMismatchError("transfer accounts must use the same currency")
@@ -220,6 +236,7 @@ class Transfer:
             destination_account_id=destination.account_id,
             amount=amount,
             metadata=metadata,
+            description=normalize_financial_description(description),
         )
         updated_source = source.record_movement(
             kind=AccountHistoryEntryKind.TRANSFER_OUT,
@@ -243,9 +260,11 @@ class BillPayment:
     account_id: UUID
     amount: Money
     metadata: RecordMetadata
+    description: str | None = None
     original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
+        validate_persisted_financial_description(self.description)
         _require_positive(self.amount)
 
     @property
@@ -282,9 +301,7 @@ class BillPayment:
             ),
         )
 
-    def ensure_correction_of(
-        self, original: BillPayment, catalog: CategoryCatalog
-    ) -> None:
+    def ensure_correction_of(self, original: BillPayment, catalog: CategoryCatalog) -> None:
         del catalog
         if self.payable_id != original.payable_id:
             raise ValueError("bill payment correction must preserve its payable")
@@ -298,9 +315,11 @@ class InvoicePayment:
     amount: Money
     applied_amount: Money
     metadata: RecordMetadata
+    description: str | None = None
     original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
+        validate_persisted_financial_description(self.description)
         _require_positive(self.amount)
         if self.applied_amount.amount < 0:
             raise ValueError("invoice payment applied amount cannot be negative")
@@ -343,9 +362,7 @@ class InvoicePayment:
             ),
         )
 
-    def ensure_correction_of(
-        self, original: InvoicePayment, catalog: CategoryCatalog
-    ) -> None:
+    def ensure_correction_of(self, original: InvoicePayment, catalog: CategoryCatalog) -> None:
         del catalog
         if self.card_id != original.card_id:
             raise ValueError("invoice payment correction must preserve its card")

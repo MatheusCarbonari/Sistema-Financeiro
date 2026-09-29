@@ -83,7 +83,9 @@ def test_card_purchase_recognizes_expense_and_debt_without_resource_account() ->
         category_id=category_id,
     )
 
-    purchase, updated = card.purchase(allocation=allocation, catalog=catalog)
+    purchase, updated = card.purchase(
+        description="Registro de teste", allocation=allocation, catalog=catalog
+    )
     invoice = updated.invoice_for_purchase(purchase.purchase_id)
 
     assert purchase.is_expense is True
@@ -116,6 +118,7 @@ def test_installment_purchase_recognizes_full_expense_and_debt_but_splits_invoic
     )
 
     purchase, updated = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=allocation,
         installment_count=12,
         catalog=catalog,
@@ -126,12 +129,8 @@ def test_installment_purchase_recognizes_full_expense_and_debt_but_splits_invoic
     assert purchase.is_expense is True
     assert purchase.allocation.metadata.effective_date == date(2026, 9, 9)
     assert len(purchase.installments) == 12
-    assert {installment.amount for installment in purchase.installments} == {
-        Money("100.00", "BRL")
-    }
-    assert [installment.sequence for installment in purchase.installments] == list(
-        range(1, 13)
-    )
+    assert {installment.amount for installment in purchase.installments} == {Money("100.00", "BRL")}
+    assert [installment.sequence for installment in purchase.installments] == list(range(1, 13))
     assert purchase.installments[0].cycle.closing_date == date(2026, 9, 10)
     assert purchase.installments[-1].cycle.closing_date == date(2027, 8, 10)
     assert all(
@@ -139,8 +138,7 @@ def test_installment_purchase_recognizes_full_expense_and_debt_but_splits_invoic
         for installment in purchase.installments
     )
     assert all(
-        updated.invoice(installment.cycle.closing_date).principal_due
-        == Money("100.00", "BRL")
+        updated.invoice(installment.cycle.closing_date).principal_due == Money("100.00", "BRL")
         for installment in purchase.installments
     )
     assert updated.available_limit == Money("800.00", "BRL")
@@ -169,6 +167,7 @@ def test_installment_purchase_assigns_residual_cents_to_first_installments() -> 
     )
 
     purchase, _ = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=allocation,
         installment_count=3,
         catalog=catalog,
@@ -207,6 +206,7 @@ def test_installment_purchase_correction_replaces_only_open_installments() -> No
         category_id=category_id,
     )
     purchase, card = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=original_allocation,
         installment_count=4,
         catalog=catalog,
@@ -247,9 +247,7 @@ def test_installment_purchase_correction_replaces_only_open_installments() -> No
         Money("26.00", "BRL"),
     )
     assert corrected.expense_for_purchase(purchase.purchase_id) == corrected_allocation
-    assert corrected.invoice(date(2026, 9, 10)).installments == (
-        purchase.installments[0],
-    )
+    assert corrected.invoice(date(2026, 9, 10)).installments == (purchase.installments[0],)
     assert corrected.available_limit == Money("397.00", "BRL")
 
 
@@ -267,6 +265,7 @@ def test_correction_may_remove_all_open_installments_when_total_equals_frozen_su
         ),
     )
     purchase, card = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=expense(
             "100.00",
             effective_date=date(2026, 9, 9),
@@ -297,9 +296,7 @@ def test_correction_may_remove_all_open_installments_when_total_equals_frozen_su
     )
 
     assert correction.replacement_installments == ()
-    assert corrected.installments_for_purchase(purchase.purchase_id) == (
-        purchase.installments[0],
-    )
+    assert corrected.installments_for_purchase(purchase.purchase_id) == (purchase.installments[0],)
     assert corrected.available_limit == Money("475.00", "BRL")
 
 
@@ -317,6 +314,7 @@ def test_installment_invoice_payment_moves_cash_without_creating_another_expense
         ),
     )
     purchase, card = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=expense(
             "120.00",
             effective_date=date(2026, 9, 9),
@@ -339,6 +337,7 @@ def test_installment_invoice_payment_moves_cash_without_creating_another_expense
     )
 
     payment, paid_card, paid_account = card.pay_invoice(
+        description="Registro de teste",
         closing_date=purchase.installments[0].cycle.closing_date,
         account=account,
         amount=Money("40.00", "BRL"),
@@ -353,17 +352,15 @@ def test_installment_invoice_payment_moves_cash_without_creating_another_expense
     assert paid_account.balance == Money("460.00", "BRL")
     assert paid_card.invoice(date(2026, 9, 10)).amount_due == Money("0.00", "BRL")
     assert paid_card.available_limit == Money("420.00", "BRL")
-    assert paid_card.expense_for_purchase(purchase.purchase_id).total == Money(
-        "120.00", "BRL"
-    )
-    cash_flow = paid_card.cash_flow(
-        start_date=date(2026, 9, 1), end_date=date(2026, 11, 30)
-    )
+    assert paid_card.expense_for_purchase(purchase.purchase_id).total == Money("120.00", "BRL")
+    cash_flow = paid_card.cash_flow(start_date=date(2026, 9, 1), end_date=date(2026, 11, 30))
     assert isinstance(cash_flow, CardCashFlow)
     assert cash_flow.scheduled_installments == purchase.installments
-    assert tuple(
-        item.cycle.due_date for item in cash_flow.scheduled_installments
-    ) == (date(2026, 9, 17), date(2026, 10, 17), date(2026, 11, 17))
+    assert tuple(item.cycle.due_date for item in cash_flow.scheduled_installments) == (
+        date(2026, 9, 17),
+        date(2026, 10, 17),
+        date(2026, 11, 17),
+    )
     assert cash_flow.realized_payments == (payment,)
     assert cash_flow.realized_payments[0].metadata.effective_date == date(2026, 9, 17)
 
@@ -382,6 +379,7 @@ def test_correction_freezes_an_invoice_paid_before_its_effective_date() -> None:
         ),
     )
     purchase, card = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=expense(
             "90.00",
             effective_date=date(2026, 9, 9),
@@ -403,6 +401,7 @@ def test_correction_freezes_an_invoice_paid_before_its_effective_date() -> None:
         ),
     )
     _, card, _ = card.pay_invoice(
+        description="Registro de teste",
         closing_date=date(2026, 10, 10),
         account=account,
         amount=Money("30.00", "BRL"),
@@ -485,6 +484,7 @@ def test_correction_does_not_freeze_payment_with_later_effective_date() -> None:
         ),
     )
     purchase, card = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=expense(
             "90.00",
             effective_date=date(2026, 9, 9),
@@ -506,6 +506,7 @@ def test_correction_does_not_freeze_payment_with_later_effective_date() -> None:
         ),
     )
     _, card, _ = card.pay_invoice(
+        description="Registro de teste",
         closing_date=date(2026, 10, 10),
         account=account,
         amount=Money("30.00", "BRL"),
@@ -534,10 +535,10 @@ def test_correction_does_not_freeze_payment_with_later_effective_date() -> None:
     )
 
     assert correction.previous_installments == purchase.installments
-    assert tuple(
-        item.amount
-        for item in corrected.installments_for_purchase(purchase.purchase_id)
-    ) == (Money("33.00", "BRL"),) * 3
+    assert (
+        tuple(item.amount for item in corrected.installments_for_purchase(purchase.purchase_id))
+        == (Money("33.00", "BRL"),) * 3
+    )
     assert corrected.invoice(date(2026, 10, 10)).amount_due == Money("3.00", "BRL")
 
 
@@ -555,6 +556,7 @@ def test_retroactive_correction_uses_schedule_effective_on_its_date() -> None:
         ),
     )
     purchase, card = card.purchase_in_installments(
+        description="Registro de teste",
         allocation=expense(
             "90.00",
             effective_date=date(2026, 9, 9),
@@ -603,10 +605,10 @@ def test_retroactive_correction_uses_schedule_effective_on_its_date() -> None:
 
     assert retroactive.previous_installments == purchase.installments
     assert retroactive.frozen_installments == ()
-    assert tuple(
-        item.amount
-        for item in corrected.installments_for_purchase(purchase.purchase_id)
-    ) == (Money("33.00", "BRL"),) * 3
+    assert (
+        tuple(item.amount for item in corrected.installments_for_purchase(purchase.purchase_id))
+        == (Money("33.00", "BRL"),) * 3
+    )
     assert corrected.available_limit == Money("401.00", "BRL")
 
 
@@ -630,7 +632,7 @@ def test_purchase_on_closing_day_stays_in_cycle_and_status_changes_after_boundar
         catalog=catalog,
         category_id=category_id,
     )
-    _, card = card.purchase(allocation=allocation, catalog=catalog)
+    _, card = card.purchase(description="Registro de teste", allocation=allocation, catalog=catalog)
     invoice = card.invoice_for_purchase(allocation.allocation_id)
 
     assert invoice.cycle.closing_date == date(2026, 9, 10)
@@ -680,7 +682,9 @@ def test_invoice_assignment_correction_is_explicit_and_preserves_previous_assign
         catalog=catalog,
         category_id=category_id,
     )
-    purchase, card = card.purchase(allocation=allocation, catalog=catalog)
+    purchase, card = card.purchase(
+        description="Registro de teste", allocation=allocation, catalog=catalog
+    )
 
     correction, corrected = card.correct_invoice_assignment(
         purchase_id=purchase.purchase_id,
@@ -718,6 +722,7 @@ def test_partial_invoice_payment_reduces_account_debt_and_principal_without_new_
         ),
     )
     purchase, card = card.purchase(
+        description="Registro de teste",
         allocation=expense(
             "300.00",
             effective_date=date(2026, 9, 9),
@@ -739,6 +744,7 @@ def test_partial_invoice_payment_reduces_account_debt_and_principal_without_new_
     )
 
     payment, paid_card, paid_account = card.pay_invoice(
+        description="Registro de teste",
         closing_date=purchase.invoice_closing_date,
         account=account,
         amount=Money("100.00", "BRL"),
@@ -775,6 +781,7 @@ def test_invoice_payment_cannot_exceed_debt_without_explicit_credit() -> None:
         ),
     )
     purchase, card = card.purchase(
+        description="Registro de teste",
         allocation=expense(
             "100.00",
             effective_date=date(2026, 9, 9),
@@ -797,6 +804,7 @@ def test_invoice_payment_cannot_exceed_debt_without_explicit_credit() -> None:
 
     with pytest.raises(ValueError, match="explicit card credit"):
         card.pay_invoice(
+            description="Registro de teste",
             closing_date=purchase.invoice_closing_date,
             account=account,
             amount=Money("110.00", "BRL"),
@@ -821,6 +829,7 @@ def test_financial_charge_is_separate_expense_and_does_not_consume_limit() -> No
         ),
     )
     purchase, card = card.purchase(
+        description="Registro de teste",
         allocation=expense(
             "300.00",
             effective_date=date(2026, 9, 9),
@@ -839,6 +848,7 @@ def test_financial_charge_is_separate_expense_and_does_not_consume_limit() -> No
     )
 
     charge, charged = card.add_financial_charge(
+        description="Registro de teste",
         closing_date=purchase.invoice_closing_date,
         allocation=charge_allocation,
         catalog=catalog,
@@ -866,6 +876,7 @@ def test_refund_reduces_expense_and_principal_then_creates_non_income_credit() -
         ),
     )
     purchase, card = card.purchase(
+        description="Registro de teste",
         allocation=expense(
             "300.00",
             effective_date=date(2026, 9, 9),
@@ -886,6 +897,7 @@ def test_refund_reduces_expense_and_principal_then_creates_non_income_credit() -
         ),
     )
     _, card, _ = card.pay_invoice(
+        description="Registro de teste",
         closing_date=purchase.invoice_closing_date,
         account=account,
         amount=Money("100.00", "BRL"),
@@ -907,9 +919,7 @@ def test_refund_reduces_expense_and_principal_then_creates_non_income_credit() -
     assert refund.is_income is False
     assert refund.reduces_expense is True
     assert refund.principal_reduction == Money("200.00", "BRL")
-    assert refunded.invoice(purchase.invoice_closing_date).amount_due == Money(
-        "0.00", "BRL"
-    )
+    assert refunded.invoice(purchase.invoice_closing_date).amount_due == Money("0.00", "BRL")
     assert refunded.card_credit_balance == Money("50.00", "BRL")
     assert refunded.available_limit == Money("1000.00", "BRL")
 
@@ -928,6 +938,7 @@ def test_explicit_invoice_overpayment_creates_card_credit() -> None:
         ),
     )
     purchase, card = card.purchase(
+        description="Registro de teste",
         allocation=expense(
             "100.00",
             effective_date=date(2026, 9, 9),
@@ -949,6 +960,7 @@ def test_explicit_invoice_overpayment_creates_card_credit() -> None:
     )
 
     payment, paid_card, paid_account = card.pay_invoice(
+        description="Registro de teste",
         closing_date=purchase.invoice_closing_date,
         account=account,
         amount=Money("110.00", "BRL"),
@@ -960,9 +972,10 @@ def test_explicit_invoice_overpayment_creates_card_credit() -> None:
     )
 
     assert payment.applied_amount == Money("100.00", "BRL")
-    assert paid_card.invoice(purchase.invoice_closing_date).status_on(
-        date(2026, 9, 17)
-    ) is InvoiceStatus.PAID
+    assert (
+        paid_card.invoice(purchase.invoice_closing_date).status_on(date(2026, 9, 17))
+        is InvoiceStatus.PAID
+    )
     assert paid_card.card_credit_balance == Money("10.00", "BRL")
     assert paid_account.balance == Money("890.00", "BRL")
 
@@ -1019,7 +1032,7 @@ def test_purchase_above_limit_is_rejected_by_operation_and_rehydration() -> None
     )
 
     with pytest.raises(ValueError, match="available limit"):
-        card.purchase(allocation=allocation, catalog=catalog)
+        card.purchase(description="Registro de teste", allocation=allocation, catalog=catalog)
 
     forged = CardPurchase(
         card_id=card.card_id,

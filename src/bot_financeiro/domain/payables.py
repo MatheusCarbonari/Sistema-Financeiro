@@ -7,6 +7,10 @@ from uuid import UUID
 
 from bot_financeiro.domain.audit import RecordMetadata
 from bot_financeiro.domain.categories import Allocation, CategoryCatalog, FinancialNature
+from bot_financeiro.domain.descriptions import (
+    normalize_financial_description,
+    validate_persisted_financial_description,
+)
 from bot_financeiro.domain.financial_changes import AccountEffect, DebtEffect
 from bot_financeiro.domain.money import Money
 from bot_financeiro.domain.movements import BillPayment
@@ -24,11 +28,13 @@ class PayableStatus(StrEnum):
 class PayableOpened:
     allocation: Allocation
     due_date: date
+    description: str | None = None
     original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
             raise ValueError("payable opening requires an expense allocation")
+        validate_persisted_financial_description(self.description)
         if self.allocation.total.amount <= 0:
             raise ValueError("payable original amount must be positive")
 
@@ -56,9 +62,7 @@ class PayableOpened:
     def debt_effects(self) -> tuple[DebtEffect, ...]:
         return (DebtEffect(self.event_id, self.amount),)
 
-    def ensure_correction_of(
-        self, original: PayableOpened, catalog: CategoryCatalog
-    ) -> None:
+    def ensure_correction_of(self, original: PayableOpened, catalog: CategoryCatalog) -> None:
         del original
         self.allocation.ensure_categories_compatible(catalog, require_active=True)
 
@@ -67,11 +71,13 @@ class PayableOpened:
 class FinancialCharge:
     payable_id: UUID
     allocation: Allocation
+    description: str | None = None
     original_event_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.allocation.nature is not FinancialNature.EXPENSE:
             raise ValueError("financial charge requires an expense allocation")
+        validate_persisted_financial_description(self.description)
         if self.allocation.total.amount <= 0:
             raise ValueError("financial charge amount must be positive")
 
@@ -99,9 +105,7 @@ class FinancialCharge:
     def debt_effects(self) -> tuple[DebtEffect, ...]:
         return (DebtEffect(self.payable_id, self.amount),)
 
-    def ensure_correction_of(
-        self, original: FinancialCharge, catalog: CategoryCatalog
-    ) -> None:
+    def ensure_correction_of(self, original: FinancialCharge, catalog: CategoryCatalog) -> None:
         if self.payable_id != original.payable_id:
             raise ValueError("financial charge correction must preserve its payable")
         self.allocation.ensure_categories_compatible(catalog, require_active=True)
@@ -136,10 +140,17 @@ class Payable:
         allocation: Allocation,
         due_date: date,
         catalog: CategoryCatalog,
+        description: str,
     ) -> Payable:
         allocation.ensure_categories_compatible(catalog, require_active=True)
         return cls(
-            history=(PayableOpened(allocation=allocation, due_date=due_date),),
+            history=(
+                PayableOpened(
+                    allocation=allocation,
+                    due_date=due_date,
+                    description=normalize_financial_description(description),
+                ),
+            ),
             identity=allocation.allocation_id,
         )
 
@@ -181,12 +192,14 @@ class Payable:
         account: ResourceAccount,
         amount: Money,
         metadata: RecordMetadata,
+        description: str,
     ) -> tuple[BillPayment, Payable, ResourceAccount]:
         payment = BillPayment(
             payable_id=self.payable_id,
             account_id=account.account_id,
             amount=amount,
             metadata=metadata,
+            description=normalize_financial_description(description),
         )
         if payment.amount > self.amount_due:
             raise ValueError("bill payment cannot exceed the amount due")
@@ -202,11 +215,16 @@ class Payable:
         *,
         allocation: Allocation,
         catalog: CategoryCatalog,
+        description: str,
     ) -> tuple[FinancialCharge, Payable]:
         if self.amount_due.amount == 0:
             raise ValueError("paid payable rejects new financial charges")
         allocation.ensure_categories_compatible(catalog, require_active=True)
-        charge = FinancialCharge(payable_id=self.payable_id, allocation=allocation)
+        charge = FinancialCharge(
+            payable_id=self.payable_id,
+            allocation=allocation,
+            description=normalize_financial_description(description),
+        )
         return charge, replace(self, history=(*self.history, charge))
 
     def ensure_append_only_successor_of(self, previous: Payable) -> None:

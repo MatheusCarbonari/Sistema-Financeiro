@@ -57,6 +57,7 @@ def test_repository_round_trip_preserves_account_policy_and_immutable_history() 
         unit_of_work.commit()
 
     adjusted = account.adjust_balance(
+        description="Registro de teste",
         actual_balance=Money("77.45", "BRL"),
         reason="Conciliação com o saldo do banco",
         metadata=metadata("2ccb862b-1834-40cc-9411-41d1944f55fa", day=2),

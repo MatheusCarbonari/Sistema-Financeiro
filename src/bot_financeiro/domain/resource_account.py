@@ -3,6 +3,10 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from bot_financeiro.domain.audit import RecordMetadata
+from bot_financeiro.domain.descriptions import (
+    normalize_financial_description,
+    validate_persisted_financial_description,
+)
 from bot_financeiro.domain.money import CurrencyMismatchError, Money
 
 
@@ -41,10 +45,12 @@ class AccountHistoryEntry:
     metadata: RecordMetadata
     reason: str | None = None
     movement_id: UUID | None = None
+    description: str | None = None
 
     def __post_init__(self) -> None:
         if self.difference.currency != self.balance.currency:
             raise CurrencyMismatchError("history values must use the same currency")
+        validate_persisted_financial_description(self.description)
         if (
             self.kind is AccountHistoryEntryKind.BALANCE_ADJUSTMENT
             and not (self.reason or "").strip()
@@ -179,6 +185,7 @@ class ResourceAccount:
         *,
         actual_balance: Money,
         reason: str,
+        description: str,
         metadata: RecordMetadata,
     ) -> "ResourceAccount":
         if self.status is AccountStatus.ARCHIVED:
@@ -198,6 +205,7 @@ class ResourceAccount:
             difference=difference,
             balance=actual_balance,
             reason=normalized_reason,
+            description=normalize_financial_description(description),
             metadata=metadata,
         )
         return replace(

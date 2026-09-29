@@ -88,6 +88,7 @@ financial_fact_changes = Table(
     Column("replacement_effective_date", Date, nullable=True),
     Column("replacement_recorded_at", String, nullable=True),
     Column("replacement_origin", String(16), nullable=True),
+    Column("replacement_description", String, nullable=True),
     UniqueConstraint("target_id", "sequence"),
 )
 
@@ -115,11 +116,7 @@ class SqlAlchemyFinancialChangeRepository:
             if isinstance(change, FinancialFactCorrected)
             else self._target_kind(change.target_id),
             "sequence": 1 if sequence is None else sequence + 1,
-            "kind": (
-                "cancellation"
-                if isinstance(change, FinancialFactCanceled)
-                else "correction"
-            ),
+            "kind": ("cancellation" if isinstance(change, FinancialFactCanceled) else "correction"),
             "previous_version_id": str(change.previous_version_id),
             "reason": change.reason,
             "recorded_effective_date": change.metadata.effective_date,
@@ -142,6 +139,7 @@ class SqlAlchemyFinancialChangeRepository:
             "replacement_effective_date": None,
             "replacement_recorded_at": None,
             "replacement_origin": None,
+            "replacement_description": None,
         }
         if isinstance(change, FinancialFactCorrected):
             values.update(self._replacement_values(change.replacement))
@@ -203,9 +201,7 @@ class SqlAlchemyFinancialChangeRepository:
         )
         codec = _CODECS_BY_KIND.get(row["replacement_kind"])
         if codec is None or codec.decode is None:
-            raise ValueError(
-                f"unknown corrected financial fact kind: {row['replacement_kind']}"
-            )
+            raise ValueError(f"unknown corrected financial fact kind: {row['replacement_kind']}")
         return codec.decode(self, row, replacement_metadata)
 
     @staticmethod
@@ -217,6 +213,7 @@ class SqlAlchemyFinancialChangeRepository:
             "replacement_effective_date": replacement.metadata.effective_date,
             "replacement_recorded_at": replacement.metadata.recorded_at.isoformat(),
             "replacement_origin": replacement.metadata.origin.value,
+            "replacement_description": getattr(replacement, "description", None),
         }
         codec = _CODECS_BY_TYPE.get(type(replacement))
         if codec is None or codec.encode is None:
@@ -267,6 +264,7 @@ def _decode_transfer(repository, row, replacement_metadata):
             row["replacement_amount_minor_units"], row["replacement_currency"]
         ),
         metadata=replacement_metadata,
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -280,6 +278,7 @@ def _decode_bill_payment(repository, row, replacement_metadata):
             row["replacement_amount_minor_units"], row["replacement_currency"]
         ),
         metadata=replacement_metadata,
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -297,6 +296,7 @@ def _decode_invoice_payment(repository, row, replacement_metadata):
             row["replacement_applied_amount_minor_units"], row["replacement_currency"]
         ),
         metadata=replacement_metadata,
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -307,6 +307,7 @@ def _decode_income(repository, row, replacement_metadata):
         allocation=_replacement_allocation(
             repository, row, replacement_metadata, require_matching_metadata=True
         ),
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -318,6 +319,7 @@ def _decode_cash_expense(repository, row, replacement_metadata):
         allocation=_replacement_allocation(
             repository, row, replacement_metadata, require_matching_metadata=True
         ),
+        description=row["replacement_description"],
         related_transfer_id=None if related is None else UUID(related),
         original_event_id=UUID(row["target_id"]),
     )
@@ -329,6 +331,7 @@ def _decode_payable_opened(repository, row, replacement_metadata):
             repository, row, replacement_metadata, require_matching_metadata=False
         ),
         due_date=row["replacement_due_date"],
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -339,6 +342,7 @@ def _decode_payable_charge(repository, row, replacement_metadata):
         allocation=_replacement_allocation(
             repository, row, replacement_metadata, require_matching_metadata=False
         ),
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -350,6 +354,7 @@ def _decode_card_purchase(repository, row, replacement_metadata):
             repository, row, replacement_metadata, require_matching_metadata=False
         ),
         invoice_closing_date=row["replacement_invoice_closing_date"],
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -361,6 +366,7 @@ def _decode_invoice_charge(repository, row, replacement_metadata):
         allocation=_replacement_allocation(
             repository, row, replacement_metadata, require_matching_metadata=False
         ),
+        description=row["replacement_description"],
         original_event_id=UUID(row["target_id"]),
     )
 
@@ -400,9 +406,7 @@ def _encode_invoice_payment(fact):
         "replacement_account_id": str(fact.account_id),
         "replacement_card_id": str(fact.card_id),
         "replacement_invoice_closing_date": fact.invoice_closing_date,
-        "replacement_applied_amount_minor_units": money_to_minor_units(
-            fact.applied_amount
-        ),
+        "replacement_applied_amount_minor_units": money_to_minor_units(fact.applied_amount),
     }
 
 
@@ -445,12 +449,8 @@ _FACT_CODECS = (
         _decode_payable_charge,
         _encode_payable_charge,
     ),
-    _FinancialFactCodec(
-        "card_purchase", CardPurchase, _decode_card_purchase, _encode_card_fact
-    ),
-    _FinancialFactCodec(
-        "installment_purchase", InstallmentPurchase, None, None
-    ),
+    _FinancialFactCodec("card_purchase", CardPurchase, _decode_card_purchase, _encode_card_fact),
+    _FinancialFactCodec("installment_purchase", InstallmentPurchase, None, None),
     _FinancialFactCodec(
         "invoice_financial_charge",
         InvoiceFinancialCharge,
@@ -472,7 +472,5 @@ def current_financial_fact(session: Session, original):
     repository = SqlAlchemyFinancialChangeRepository(session)
     for row in rows:
         change = repository.deserialize_change(row)
-        current = (
-            None if isinstance(change, FinancialFactCanceled) else change.replacement
-        )
+        current = None if isinstance(change, FinancialFactCanceled) else change.replacement
     return current

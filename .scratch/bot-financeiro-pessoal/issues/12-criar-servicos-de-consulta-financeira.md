@@ -32,3 +32,23 @@ Produzir consultas reconciliáveis que distingam dinheiro, dívida, patrimônio,
 
 ## Comments
 
+### Parte 1 — concluída, Ticket permanece aberto
+
+- Criada a fachada `FinancialQueries` para busca combinável de Movimentações e Extrato por Conta de recursos.
+- O Extrato reconstrói o Saldo usando Saldo inicial, Ajustes e a versão financeira corrente de cada fato; compensações históricas permanecem apenas para auditoria.
+- Períodos são inclusivos e usam Data efetiva; Momento do registro inicial e da versão corrente são expostos separadamente.
+- Introduzida Descrição financeira pesquisável, distinta de motivo e origem, com herança pela Despesa/Compra original em Reembolsos e Parcelas.
+- A migração `0009` mantém descrições legadas como ausentes, sem inventar informação, e permite sua reconstrução e Correção posterior.
+- As Partes 2–4 e a validação integrada continuam pendentes.
+
+### Parte 2 — concluída, Ticket permanece aberto
+
+- `FinancialQueries.income_and_expense_report(...)` apresenta Receitas, Despesa bruta, Reembolsos e Despesa líquida por período e moeda, sempre com componentes reconciliáveis.
+- O reconhecimento usa a Data efetiva de cada fato; Reembolsos pertencem ao próprio período e podem produzir Despesa líquida negativa legitimamente.
+- Compras parceladas são reconhecidas integralmente como Despesa; Parcelas, pagamentos de contas e pagamentos de Faturas não criam nova Despesa.
+- Reembolsos em conta e cartão reduzem o gasto líquido sem virar Receita e herdam Descrição e Rateios vigentes da Despesa original.
+- A distribuição proporcional de Reembolsos preserva o total exato e distribui resíduos por ordem estável de Categoria financeira.
+- Categorias apresentam valores diretos, descendentes e inclusivos sem duplicação; categorias sem movimento são omitidas e arquivadas com movimento permanecem visíveis.
+- Correções usam a versão financeira vigente, Cancelamentos retiram os efeitos atuais e moedas diferentes permanecem separadas.
+- As Partes 3–4 e a validação integrada continuam pendentes.
+

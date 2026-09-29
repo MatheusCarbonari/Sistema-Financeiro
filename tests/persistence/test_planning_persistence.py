@@ -85,6 +85,7 @@ def test_migration_0007_preserves_existing_data() -> None:
 def test_repository_round_trips_occurrence_and_recurrence_histories() -> None:
     engine, sessions = configured_database()
     occurrence = PlannedOccurrence.plan(
+        description="Registro de teste",
         account_id=ACCOUNT_ID,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -93,6 +94,7 @@ def test_repository_round_trips_occurrence_and_recurrence_histories() -> None:
         metadata=record_metadata("7604d43a-1924-4f1f-aa5b-ebf08563e06e", 1),
     )
     recurrence = Recurrence.create(
+        description="Registro de teste",
         account_id=ACCOUNT_ID,
         direction=ForecastDirection.INFLOW,
         expected_amount=Money("200.00", "BRL"),
@@ -139,8 +141,7 @@ def test_repository_round_trips_occurrence_and_recurrence_histories() -> None:
     assert restored_occurrence == revised_occurrence
     assert restored_recurrence == revised_recurrence
     assert tuple(
-        item.planned_date
-        for item in restored_recurrence.occurrences_through(date(2026, 12, 15))
+        item.planned_date for item in restored_recurrence.occurrences_through(date(2026, 12, 15))
     ) == (
         date(2026, 10, 15),
         date(2026, 11, 15),
@@ -162,6 +163,7 @@ def test_repository_round_trips_occurrence_and_recurrence_histories() -> None:
 def test_database_keeps_planning_origins_append_only(statement: str) -> None:
     engine, sessions = configured_database()
     occurrence = PlannedOccurrence.plan(
+        description="Registro de teste",
         account_id=ACCOUNT_ID,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -170,6 +172,7 @@ def test_database_keeps_planning_origins_append_only(statement: str) -> None:
         metadata=record_metadata("7604d43a-1924-4f1f-aa5b-ebf08563e06e", 1),
     )
     recurrence = Recurrence.create(
+        description="Registro de teste",
         account_id=ACCOUNT_ID,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),

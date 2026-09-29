@@ -105,6 +105,7 @@ class PlanningOperations:
         expected_amount: Money,
         planned_date: date,
         margin: SafetyMargin | None,
+        description: str,
         metadata: RecordMetadata,
     ) -> PlannedOccurrence:
         occurrence = PlannedOccurrence.plan(
@@ -113,6 +114,7 @@ class PlanningOperations:
             expected_amount=expected_amount,
             planned_date=planned_date,
             margin=margin,
+            description=description,
             metadata=metadata,
         )
         with self._unit_of_work_factory() as unit_of_work:
@@ -132,6 +134,7 @@ class PlanningOperations:
         frequency: RecurrenceFrequency,
         interval: int,
         margin: SafetyMargin | None,
+        description: str,
         metadata: RecordMetadata,
     ) -> Recurrence:
         recurrence = Recurrence.create(
@@ -143,6 +146,7 @@ class PlanningOperations:
             frequency=frequency,
             interval=interval,
             margin=margin,
+            description=description,
             metadata=metadata,
         )
         with self._unit_of_work_factory() as unit_of_work:
@@ -174,6 +178,7 @@ class PlanningOperations:
         expected_amount: Money,
         planned_date: date,
         margin: SafetyMargin | None,
+        description: str | None = None,
         reason: str,
         metadata: RecordMetadata,
     ) -> PlannedOccurrence:
@@ -181,22 +186,19 @@ class PlanningOperations:
             current = self._current_occurrence(unit_of_work, occurrence)
             if current.recurrence_id is not None:
                 horizon = max(current.planned_date, planned_date)
-                siblings = self._occurrences(
-                    unit_of_work, current.account_id, horizon
-                )
+                siblings = self._occurrences(unit_of_work, current.account_id, horizon)
                 if any(
                     item.recurrence_id == current.recurrence_id
                     and item.occurrence_id != current.occurrence_id
                     and item.planned_date == planned_date
                     for item in siblings
                 ):
-                    raise ValueError(
-                        "occurrence revision conflicts with another recurrence date"
-                    )
+                    raise ValueError("occurrence revision conflicts with another recurrence date")
             revised = current.revise(
                 expected_amount=expected_amount,
                 planned_date=planned_date,
                 margin=margin,
+                description=description,
                 reason=reason,
                 metadata=metadata,
             )
@@ -213,6 +215,7 @@ class PlanningOperations:
         margin: SafetyMargin | None,
         frequency: RecurrenceFrequency | None = None,
         interval: int | None = None,
+        description: str | None = None,
         reason: str,
         metadata: RecordMetadata,
     ) -> Recurrence:
@@ -222,9 +225,7 @@ class PlanningOperations:
                 raise LookupError(f"recurrence {recurrence_id} does not exist")
             if (frequency is not None or interval is not None) and any(
                 event_date >= from_date
-                for event_date in unit_of_work.planning.occurrence_event_dates(
-                    recurrence_id
-                )
+                for event_date in unit_of_work.planning.occurrence_event_dates(recurrence_id)
             ):
                 raise ValueError(
                     "recurrence cadence cannot replace occurrences with preserved history"
@@ -235,6 +236,7 @@ class PlanningOperations:
                 margin=margin,
                 frequency=frequency,
                 interval=interval,
+                description=description,
                 reason=reason,
                 metadata=metadata,
             )
@@ -366,9 +368,10 @@ class PlanningOperations:
             if recurrence.account_id == account_id
             for occurrence in recurrence.occurrences_through(
                 max(
-                    (through_date, *unit_of_work.planning.occurrence_source_dates(
-                        recurrence.recurrence_id
-                    ))
+                    (
+                        through_date,
+                        *unit_of_work.planning.occurrence_source_dates(recurrence.recurrence_id),
+                    )
                 )
             )
         ]

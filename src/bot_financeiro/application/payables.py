@@ -50,12 +50,15 @@ class PayableOperations:
     def __init__(self, unit_of_work_factory: Callable[[], PayableUnitOfWork]) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
-    def create_payable(self, *, allocation: Allocation, due_date: date) -> Payable:
+    def create_payable(
+        self, *, allocation: Allocation, due_date: date, description: str
+    ) -> Payable:
         with self._unit_of_work_factory() as unit_of_work:
             payable = Payable.open(
                 allocation=allocation,
                 due_date=due_date,
                 catalog=unit_of_work.categories.catalog(),
+                description=description,
             )
             unit_of_work.allocations.add(allocation)
             unit_of_work.payables.add(payable)
@@ -73,6 +76,7 @@ class PayableOperations:
         account_id: UUID,
         amount: Money,
         metadata: RecordMetadata,
+        description: str,
     ) -> BillPayment:
         with self._unit_of_work_factory() as unit_of_work:
             payable = unit_of_work.payables.get(payable_id)
@@ -85,6 +89,7 @@ class PayableOperations:
                 account=account,
                 amount=amount,
                 metadata=metadata,
+                description=description,
             )
             unit_of_work.movements.add(payment)
             unit_of_work.payables.save(updated_payable)
@@ -97,6 +102,7 @@ class PayableOperations:
         *,
         payable_id: UUID,
         allocation: Allocation,
+        description: str,
     ) -> FinancialCharge:
         with self._unit_of_work_factory() as unit_of_work:
             payable = unit_of_work.payables.get(payable_id)
@@ -105,6 +111,7 @@ class PayableOperations:
             charge, updated_payable = payable.add_financial_charge(
                 allocation=allocation,
                 catalog=unit_of_work.categories.catalog(),
+                description=description,
             )
             unit_of_work.allocations.add(allocation)
             unit_of_work.payables.save(updated_payable)

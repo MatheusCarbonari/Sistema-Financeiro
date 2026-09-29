@@ -112,6 +112,7 @@ def test_cash_expense_correction_has_inert_preview_and_atomic_confirmation() -> 
     original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
+        description="Registro de teste",
     )
     replacement = CashExpense(
         account_id=ACCOUNT_ID,
@@ -139,6 +140,7 @@ def test_cash_expense_correction_has_inert_preview_and_atomic_confirmation() -> 
     current = changes.get_history(original.movement_id).current
     assert current.amount == replacement.amount
     assert current.event_id == original.event_id
+    assert current.description == "Registro de teste"
     assert changes.expense_breakdown(original.movement_id).gross_expense == Money("80.00", "BRL")
 
 
@@ -147,6 +149,7 @@ def test_stale_proposal_and_repeated_cancellation_are_rejected() -> None:
     original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
+        description="Registro de teste",
     )
     replacement = CashExpense(
         account_id=ACCOUNT_ID,
@@ -169,15 +172,15 @@ def test_stale_proposal_and_repeated_cancellation_are_rejected() -> None:
 
 
 def test_transfer_cancellation_updates_both_accounts_but_not_its_fee() -> None:
-    financial, changes, _, _ = services(
-        checking(ACCOUNT_ID), checking(OTHER_ACCOUNT_ID, "100.00")
-    )
+    financial, changes, _, _ = services(checking(ACCOUNT_ID), checking(OTHER_ACCOUNT_ID, "100.00"))
     result = financial.transfer(
+        description="Registro de teste",
         source_account_id=ACCOUNT_ID,
         destination_account_id=OTHER_ACCOUNT_ID,
         amount=Money("200.00", "BRL"),
         metadata=metadata("446008fb-e949-49f5-ac7e-ef5f1cb829b0", 2),
         fee_allocation=allocation("5.00", "78f06631-05d9-419c-b059-c91ab6cb0d61"),
+        fee_description="Tarifa de transferência",
     )
 
     proposal = changes.preview_cancellation(result.transfer.movement_id, reason="Conta errada")
@@ -205,6 +208,7 @@ def test_transfer_cancellation_preview_exposes_destination_balance_blocker() -> 
     )
     financial, changes, _, _ = services(checking(ACCOUNT_ID), wallet)
     result = financial.transfer(
+        description="Registro de teste",
         source_account_id=ACCOUNT_ID,
         destination_account_id=OTHER_ACCOUNT_ID,
         amount=Money("100.00", "BRL"),
@@ -213,6 +217,7 @@ def test_transfer_cancellation_preview_exposes_destination_balance_blocker() -> 
     financial.pay_cash_expense(
         OTHER_ACCOUNT_ID,
         allocation("100.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=3),
+        description="Registro de teste",
     )
 
     proposal = changes.preview_cancellation(result.transfer.movement_id, reason="Não ocorreu")
@@ -235,6 +240,7 @@ def test_account_refund_keeps_gross_refunded_and_net_expense_separate() -> None:
     original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
+        description="Registro de teste",
     )
     proposal = changes.preview_account_refund(
         original.movement_id,
@@ -273,6 +279,7 @@ def test_account_refund_preview_exposes_archived_destination_blocker() -> None:
     original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
+        description="Registro de teste",
     )
 
     proposal = changes.preview_account_refund(
@@ -303,6 +310,7 @@ def test_failed_correction_rolls_back_history_allocation_and_account_effect() ->
     original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("80.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
+        description="Registro de teste",
     )
     replacement = CashExpense(
         account_id=ACCOUNT_ID,
@@ -329,6 +337,7 @@ def test_correction_preview_preserves_existing_refund_in_expense_impact() -> Non
     original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
+        description="Registro de teste",
     )
     refund = changes.preview_account_refund(
         original.movement_id,
@@ -360,10 +369,12 @@ def test_correction_preview_preserves_existing_refund_in_expense_impact() -> Non
 def test_bill_payment_correction_recalculates_account_and_payable_debt() -> None:
     financial, changes, _, payables = services(checking(ACCOUNT_ID))
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
         due_date=date(2026, 9, 20),
     )
     payment = payables.pay_payable(
+        description="Registro de teste",
         payable_id=payable.payable_id,
         account_id=ACCOUNT_ID,
         amount=Money("60.00", "BRL"),
@@ -392,6 +403,7 @@ def test_bill_payment_correction_recalculates_account_and_payable_debt() -> None
 def test_payable_opening_correction_versions_expense_and_recalculates_debt() -> None:
     _, changes, _, payables = services(checking(ACCOUNT_ID))
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
         due_date=date(2026, 9, 20),
     )
@@ -416,6 +428,7 @@ def test_payable_opening_correction_versions_expense_and_recalculates_debt() -> 
 def test_payable_expense_can_be_refunded_into_a_resource_account() -> None:
     financial, changes, _, payables = services(checking(ACCOUNT_ID))
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
         due_date=date(2026, 9, 20),
     )
@@ -448,10 +461,12 @@ def test_invoice_payment_cancellation_recalculates_cash_and_invoice_debt() -> No
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
     )
     payment = cards.pay_invoice(
+        description="Registro de teste",
         card_id=card.card_id,
         closing_date=purchase.invoice_closing_date,
         account_id=ACCOUNT_ID,
@@ -484,10 +499,12 @@ def test_invoice_payment_with_linked_credit_blocks_unsafe_cancellation() -> None
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
     )
     payment = cards.pay_invoice(
+        description="Registro de teste",
         card_id=card.card_id,
         closing_date=purchase.invoice_closing_date,
         account_id=ACCOUNT_ID,
@@ -518,6 +535,7 @@ def test_unsettled_card_purchase_can_be_corrected_without_losing_identity() -> N
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
     )
@@ -534,13 +552,9 @@ def test_unsettled_card_purchase_can_be_corrected_without_losing_identity() -> N
     )
 
     current = cards.get_card(card.card_id)
-    corrected = next(
-        event for event in current.history if isinstance(event, CardPurchase)
-    )
+    corrected = next(event for event in current.history if isinstance(event, CardPurchase))
     assert corrected.purchase_id == purchase.purchase_id
-    assert current.invoice_for_purchase(purchase.purchase_id).principal_due == Money(
-        "80.00", "BRL"
-    )
+    assert current.invoice_for_purchase(purchase.purchase_id).principal_due == Money("80.00", "BRL")
 
 
 def test_card_refund_preview_reuses_card_refund_and_never_creates_income() -> None:
@@ -554,6 +568,7 @@ def test_card_refund_preview_reuses_card_refund_and_never_creates_income() -> No
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
     )
@@ -593,6 +608,7 @@ def test_installment_purchase_refund_uses_card_credit_across_invoice_cycles() ->
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
         installment_count=3,
@@ -609,9 +625,9 @@ def test_installment_purchase_refund_uses_card_credit_across_invoice_cycles() ->
     )
 
     assert cards.get_card(card.card_id).available_limit == Money("940.00", "BRL")
-    assert changes.card_expense_breakdown(
-        card.card_id, purchase.purchase_id
-    ).net_expense == Money("60.00", "BRL")
+    assert changes.card_expense_breakdown(card.card_id, purchase.purchase_id).net_expense == Money(
+        "60.00", "BRL"
+    )
 
 
 def test_installment_correction_preview_is_inert_and_freezes_affected_cycle() -> None:
@@ -625,6 +641,7 @@ def test_installment_correction_preview_is_inert_and_freezes_affected_cycle() ->
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
         installment_count=3,
@@ -646,12 +663,8 @@ def test_installment_correction_preview_is_inert_and_freezes_affected_cycle() ->
     assert tuple(item.amount for item in proposal.installment_impact.frozen) == (
         Money("33.34", "BRL"),
     )
-    confirmation_metadata = metadata(
-        "f3a91670-5604-4a53-919d-b0adbcc86c1d", 11, hour=13
-    )
-    correction = changes.confirm_installment_purchase_correction(
-        proposal, confirmation_metadata
-    )
+    confirmation_metadata = metadata("f3a91670-5604-4a53-919d-b0adbcc86c1d", 11, hour=13)
+    correction = changes.confirm_installment_purchase_correction(proposal, confirmation_metadata)
 
     restored = cards.get_card(card.card_id)
     assert restored is not None
@@ -659,9 +672,7 @@ def test_installment_correction_preview_is_inert_and_freezes_affected_cycle() ->
     assert tuple(
         item.amount for item in restored.installments_for_purchase(purchase.purchase_id)
     ) == (Money("33.34", "BRL"), Money("43.33", "BRL"), Money("43.33", "BRL"))
-    assert changes.card_expense_breakdown(
-        card.card_id, purchase.purchase_id
-    ) == ExpenseBreakdown(
+    assert changes.card_expense_breakdown(card.card_id, purchase.purchase_id) == ExpenseBreakdown(
         gross_expense=Money("120.00", "BRL"),
         refunded_amount=Money("0.00", "BRL"),
         net_expense=Money("120.00", "BRL"),
@@ -680,6 +691,7 @@ def test_installment_correction_preview_requires_a_reason() -> None:
         metadata=metadata("6d3f715e-65f9-4f86-856c-11e3194c916f", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "435c59d0-f603-4ab7-9f53-a993399c683c", day=9),
         installment_count=2,
@@ -709,6 +721,7 @@ def test_installment_correction_preview_can_extend_into_a_new_future_cycle() -> 
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
         installment_count=2,
@@ -717,17 +730,16 @@ def test_installment_correction_preview_can_extend_into_a_new_future_cycle() -> 
     proposal = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
-        corrected_allocation=allocation(
-            "110.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9
-        ),
+        corrected_allocation=allocation("110.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9),
         remaining_installment_count=2,
         reason="Valor confirmado",
         effective_date=date(2026, 9, 11),
     )
 
-    assert tuple(
-        item.cycle.closing_date for item in proposal.installment_impact.replacement
-    ) == (date(2026, 10, 10), date(2026, 11, 10))
+    assert tuple(item.cycle.closing_date for item in proposal.installment_impact.replacement) == (
+        date(2026, 10, 10),
+        date(2026, 11, 10),
+    )
 
 
 def test_installment_correction_rejects_a_stale_proposal() -> None:
@@ -741,6 +753,7 @@ def test_installment_correction_rejects_a_stale_proposal() -> None:
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
         installment_count=3,
@@ -748,14 +761,13 @@ def test_installment_correction_rejects_a_stale_proposal() -> None:
     proposal = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
-        corrected_allocation=allocation(
-            "120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9
-        ),
+        corrected_allocation=allocation("120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9),
         remaining_installment_count=2,
         reason="Valor confirmado",
         effective_date=date(2026, 9, 11),
     )
     cards.grant_card_credit(
+        description="Registro de teste",
         card_id=card.card_id,
         amount=Money("1.00", "BRL"),
         reason="Crédito real",
@@ -780,6 +792,7 @@ def test_installment_refund_uses_the_current_corrected_expense_value() -> None:
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
         installment_count=3,
@@ -787,9 +800,7 @@ def test_installment_refund_uses_the_current_corrected_expense_value() -> None:
     correction = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
-        corrected_allocation=allocation(
-            "120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9
-        ),
+        corrected_allocation=allocation("120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9),
         remaining_installment_count=2,
         reason="Valor confirmado",
         effective_date=date(2026, 9, 11),
@@ -810,9 +821,9 @@ def test_installment_refund_uses_the_current_corrected_expense_value() -> None:
         metadata("8520b8ee-1636-40dc-9e4f-b685720e4111", 12),
     )
 
-    assert changes.card_expense_breakdown(
-        card.card_id, purchase.purchase_id
-    ).net_expense == Money("10.00", "BRL")
+    assert changes.card_expense_breakdown(card.card_id, purchase.purchase_id).net_expense == Money(
+        "10.00", "BRL"
+    )
 
 
 def test_installment_account_refund_uses_the_current_corrected_expense_value() -> None:
@@ -826,6 +837,7 @@ def test_installment_account_refund_uses_the_current_corrected_expense_value() -
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
         installment_count=3,
@@ -833,9 +845,7 @@ def test_installment_account_refund_uses_the_current_corrected_expense_value() -
     correction = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
-        corrected_allocation=allocation(
-            "120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9
-        ),
+        corrected_allocation=allocation("120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9),
         remaining_installment_count=2,
         reason="Valor confirmado",
         effective_date=date(2026, 9, 11),
@@ -874,6 +884,7 @@ def test_installment_account_refund_rejects_preview_from_before_a_correction() -
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=2),
         installment_count=2,
@@ -886,9 +897,7 @@ def test_installment_account_refund_rejects_preview_from_before_a_correction() -
     correction = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
-        corrected_allocation=allocation(
-            "120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=2
-        ),
+        corrected_allocation=allocation("120.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=2),
         remaining_installment_count=2,
         reason="Valor confirmado",
         effective_date=date(2026, 9, 3),
@@ -916,6 +925,7 @@ def test_installment_correction_preview_blocks_total_below_existing_refund() -> 
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=2),
         installment_count=2,
@@ -933,9 +943,7 @@ def test_installment_correction_preview_blocks_total_below_existing_refund() -> 
     proposal = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
-        corrected_allocation=allocation(
-            "20.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=2
-        ),
+        corrected_allocation=allocation("20.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=2),
         remaining_installment_count=2,
         reason="Valor confirmado",
         effective_date=date(2026, 9, 4),
@@ -960,11 +968,13 @@ def test_installment_correction_preview_exposes_frozen_cycle_blocker() -> None:
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
         installment_count=3,
     )
     cards.pay_invoice(
+        description="Registro de teste",
         card_id=card.card_id,
         closing_date=date(2026, 9, 10),
         account_id=ACCOUNT_ID,
@@ -975,17 +985,13 @@ def test_installment_correction_preview_exposes_frozen_cycle_blocker() -> None:
     proposal = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.purchase_id,
-        corrected_allocation=allocation(
-            "20.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9
-        ),
+        corrected_allocation=allocation("20.00", "78f06631-05d9-419c-b059-c91ab6cb0d61", day=9),
         remaining_installment_count=2,
         reason="Valor confirmado",
         effective_date=date(2026, 9, 12),
     )
 
-    assert proposal.impact.blockers == (
-        "corrected total cannot be lower than frozen installments",
-    )
+    assert proposal.impact.blockers == ("corrected total cannot be lower than frozen installments",)
     with pytest.raises(ValueError, match="blocked"):
         changes.confirm_installment_purchase_correction(
             proposal,
@@ -1004,6 +1010,7 @@ def test_invoice_assignment_correction_requires_inert_preview_and_confirmation()
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
     )
@@ -1019,9 +1026,7 @@ def test_invoice_assignment_correction_requires_inert_preview_and_confirmation()
     assert cards.get_card(card.card_id).invoice_for_purchase(
         purchase.purchase_id
     ).cycle.closing_date == date(2026, 9, 10)
-    confirmation_metadata = metadata(
-        "975e5800-4fa9-48e5-bba2-d6064c3fc2b4", 11, hour=13
-    )
+    confirmation_metadata = metadata("975e5800-4fa9-48e5-bba2-d6064c3fc2b4", 11, hour=13)
     correction = changes.confirm_invoice_assignment_correction(
         proposal,
         confirmation_metadata,
@@ -1043,10 +1048,12 @@ def test_invoice_assignment_preview_blocks_a_cycle_with_consumed_payment() -> No
         metadata=metadata("a27b7213-92f4-46b4-9516-d72bcd3f9534", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0", day=9),
     )
     cards.pay_invoice(
+        description="Registro de teste",
         card_id=card.card_id,
         closing_date=date(2026, 9, 10),
         account_id=ACCOUNT_ID,
@@ -1075,6 +1082,7 @@ def test_account_refund_is_rejected_by_generic_change_flows() -> None:
     expense = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "446008fb-e949-49f5-ac7e-ef5f1cb829b0"),
+        description="Registro de teste",
     )
     refund_proposal = changes.preview_account_refund(
         expense.event_id,
@@ -1103,6 +1111,7 @@ def test_account_refund_rejects_registration_before_original_without_effects() -
     expense = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "83ae1bb6-9f8a-41ed-9326-199f893ff2f2", day=4),
+        description="Registro de teste",
     )
     proposal = changes.preview_account_refund(
         expense.event_id,
@@ -1117,9 +1126,7 @@ def test_account_refund_rejects_registration_before_original_without_effects() -
         )
 
     assert financial.account_statement(ACCOUNT_ID).balance == Money("900.00", "BRL")
-    assert changes.expense_breakdown(expense.event_id).refunded_amount == Money(
-        "0.00", "BRL"
-    )
+    assert changes.expense_breakdown(expense.event_id).refunded_amount == Money("0.00", "BRL")
 
 
 def test_card_specific_correction_rejects_out_of_order_confirmation() -> None:
@@ -1133,6 +1140,7 @@ def test_card_specific_correction_rejects_out_of_order_confirmation() -> None:
         metadata=metadata("138cd50f-d9b7-4ecf-964a-72f7703ed514", 1),
     )
     purchase = cards.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "67b3d6af-0e7c-4050-bfe3-eb53652cfbb6", day=9),
         installment_count=2,
@@ -1140,9 +1148,7 @@ def test_card_specific_correction_rejects_out_of_order_confirmation() -> None:
     proposal = changes.preview_installment_purchase_correction(
         card_id=card.card_id,
         purchase_id=purchase.event_id,
-        corrected_allocation=allocation(
-            "110.00", "b6e42239-63cc-40a4-9a07-99aa0f2a87b8", day=9
-        ),
+        corrected_allocation=allocation("110.00", "b6e42239-63cc-40a4-9a07-99aa0f2a87b8", day=9),
         remaining_installment_count=2,
         reason="Valor correto",
         effective_date=date(2026, 9, 11),
@@ -1175,6 +1181,7 @@ def test_invoice_assignment_and_card_refund_reject_out_of_order_confirmation() -
         metadata=metadata("1a2a5578-18f5-40c1-97db-e70238140706", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "0e18ab23-c369-48a2-82b1-b55a6503e818", day=9),
     )
@@ -1215,12 +1222,10 @@ def test_invoice_assignment_and_card_refund_reject_out_of_order_confirmation() -
         )
 
     restored = cards.get_card(card.card_id)
-    assert restored.invoice_for_purchase(purchase.event_id).cycle.closing_date == date(
-        2026, 9, 10
+    assert restored.invoice_for_purchase(purchase.event_id).cycle.closing_date == date(2026, 9, 10)
+    assert changes.card_expense_breakdown(card.card_id, purchase.event_id).refunded_amount == Money(
+        "0.00", "BRL"
     )
-    assert changes.card_expense_breakdown(
-        card.card_id, purchase.event_id
-    ).refunded_amount == Money("0.00", "BRL")
 
 
 def test_refund_registration_order_is_shared_across_account_and_card_channels() -> None:
@@ -1234,6 +1239,7 @@ def test_refund_registration_order_is_shared_across_account_and_card_channels() 
         metadata=metadata("330308c1-8992-4323-b6d4-96fc0a7d55d8", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "b8c73114-8876-4a1d-8c72-17ae9957516b", day=9),
     )
@@ -1269,6 +1275,7 @@ def test_refund_registration_order_is_shared_across_account_and_card_channels() 
         metadata=metadata("622c6458-16f5-4158-a713-df2981683bbe", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "09230af6-d965-4404-a038-7bef7b975ff8", day=9),
     )
@@ -1292,9 +1299,9 @@ def test_refund_registration_order_is_shared_across_account_and_card_channels() 
             card_refund,
             metadata("7c0eb9bc-9f67-41a0-8074-4ba0a6a25750", 11),
         )
-    assert changes.card_expense_breakdown(
-        card.card_id, purchase.event_id
-    ).refunded_amount == Money("20.00", "BRL")
+    assert changes.card_expense_breakdown(card.card_id, purchase.event_id).refunded_amount == Money(
+        "20.00", "BRL"
+    )
 
 
 def test_purchase_with_invoice_assignment_correction_blocks_cancellation() -> None:
@@ -1308,6 +1315,7 @@ def test_purchase_with_invoice_assignment_correction_blocks_cancellation() -> No
         metadata=metadata("e7c48cfa-f8a8-44f6-866a-dd9f22a78ccd", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "58962324-287f-4a6c-a857-a3aa50331ab4", day=9),
     )
@@ -1342,10 +1350,12 @@ def test_movement_queries_return_current_versions_and_omit_cancellations() -> No
     corrected_original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "07588bb7-4041-47d7-8f36-24c7a7273d6d"),
+        description="Registro de teste",
     )
     canceled = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("30.00", "7ea71839-cc69-4888-b869-429863357f23"),
+        description="Registro de teste",
     )
     replacement = CashExpense(
         account_id=ACCOUNT_ID,
@@ -1387,9 +1397,7 @@ def test_movement_queries_return_current_versions_and_omit_cancellations() -> No
         metadata("38545dd7-76b1-4697-88a8-64b84702751a", 7),
     )
 
-    assert financial.get_movement(corrected_original.event_id).amount == Money(
-        "70.00", "BRL"
-    )
+    assert financial.get_movement(corrected_original.event_id).amount == Money("70.00", "BRL")
     assert len(changes.get_history(corrected_original.event_id).events) == 2
 
 
@@ -1398,14 +1406,13 @@ def test_confirmation_rejects_registration_before_original_without_side_effects(
     original = financial.pay_cash_expense(
         ACCOUNT_ID,
         allocation("100.00", "8bd597dd-624c-4566-a31c-081086b00631", day=2),
+        description="Registro de teste",
     )
     proposal = changes.preview_correction(
         original.event_id,
         CashExpense(
             account_id=ACCOUNT_ID,
-            allocation=allocation(
-                "80.00", "3b7d99a8-747f-4681-aaeb-da6832a87a13", day=2
-            ),
+            allocation=allocation("80.00", "3b7d99a8-747f-4681-aaeb-da6832a87a13", day=2),
         ),
         reason="Valor correto",
     )
@@ -1428,10 +1435,12 @@ def test_confirmation_rejects_registration_before_original_without_side_effects(
 def test_payable_financial_charge_correction_and_cancellation_recalculate_debt() -> None:
     _, changes, _, payables = services(checking(ACCOUNT_ID))
     payable = payables.create_payable(
+        description="Registro de teste",
         allocation=allocation("100.00", "537d3501-ac20-4787-834c-1f2cab028792"),
         due_date=date(2026, 9, 20),
     )
     charge = payables.add_financial_charge(
+        description="Registro de teste",
         payable_id=payable.payable_id,
         allocation=allocation("20.00", "c142161a-9307-4077-82aa-9724f2442e22", day=4),
     )
@@ -1496,10 +1505,12 @@ def test_invoice_financial_charge_correction_and_cancellation_recalculate_debt()
         metadata=metadata("34def08c-3d1f-405b-8442-21eb1a1845cc", 1),
     )
     purchase = cards.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=allocation("100.00", "52cd99e9-156e-4b07-b1b0-5c666d8b058f"),
     )
     charge = cards.add_financial_charge(
+        description="Registro de teste",
         card_id=card.card_id,
         closing_date=purchase.invoice_closing_date,
         allocation=allocation("20.00", "c9d75ff2-6f05-4cd6-bd71-245c2f969be0", day=4),
@@ -1524,9 +1535,7 @@ def test_invoice_financial_charge_correction_and_cancellation_recalculate_debt()
         card_id=card.card_id,
         closing_date=purchase.invoice_closing_date,
     ).amount_due == Money("115.00", "BRL")
-    assert changes.expense_breakdown(charge.event_id).gross_expense == Money(
-        "15.00", "BRL"
-    )
+    assert changes.expense_breakdown(charge.event_id).gross_expense == Money("15.00", "BRL")
 
     cancellation = changes.preview_cancellation(
         charge.event_id,

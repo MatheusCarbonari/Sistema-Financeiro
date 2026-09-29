@@ -55,9 +55,7 @@ def operations_with(
         for category in catalog.categories:
             categories.add(category)
         unit_of_work.commit()
-    return FinancialOperations(
-        lambda: SqlAlchemyFinancialOperationUnitOfWork(sessions)
-    )
+    return FinancialOperations(lambda: SqlAlchemyFinancialOperationUnitOfWork(sessions))
 
 
 def test_receiving_income_increases_one_account_and_preserves_its_allocation() -> None:
@@ -83,7 +81,9 @@ def test_receiving_income_increases_one_account_and_preserves_its_allocation() -
     )
     operations = operations_with(account, catalog)
 
-    income = operations.receive_income(account.account_id, allocation)
+    income = operations.receive_income(
+        account.account_id, allocation, description="Registro de teste"
+    )
 
     assert isinstance(income, Income)
     assert income.account_id == account.account_id
@@ -116,7 +116,9 @@ def test_paying_cash_expense_uses_effective_date_and_reduces_one_account() -> No
     )
     operations = operations_with(account, catalog)
 
-    expense = operations.pay_cash_expense(account.account_id, allocation)
+    expense = operations.pay_cash_expense(
+        account.account_id, allocation, description="Registro de teste"
+    )
 
     assert isinstance(expense, CashExpense)
     assert expense.metadata.effective_date == date(2026, 9, 5)
@@ -142,6 +144,7 @@ def test_transfer_moves_the_same_value_without_income_expense_or_net_worth_effec
     operations = operations_with(source, CategoryCatalog.empty(), destination)
 
     result = operations.transfer(
+        description="Registro de teste",
         source_account_id=source.account_id,
         destination_account_id=destination.account_id,
         amount=Money("275.35", "BRL"),
@@ -154,11 +157,9 @@ def test_transfer_moves_the_same_value_without_income_expense_or_net_worth_effec
     assert result.transfer.is_expense is False
     assert result.fee_expense is None
     assert operations.get_movement(result.transfer.movement_id) == result.transfer
-    assert (
-        operations.account_statement(source.account_id).balance
-        + operations.account_statement(destination.account_id).balance
-        == Money("1400.00", "BRL")
-    )
+    assert operations.account_statement(source.account_id).balance + operations.account_statement(
+        destination.account_id
+    ).balance == Money("1400.00", "BRL")
 
 
 def test_transfer_rejects_accounts_in_different_currencies_without_changing_them() -> None:
@@ -178,6 +179,7 @@ def test_transfer_rejects_accounts_in_different_currencies_without_changing_them
     )
     with pytest.raises(ValueError, match="same currency"):
         Transfer.execute(
+            description="Registro de teste",
             source=source,
             destination=destination,
             amount=Money("10.00", "BRL"),
@@ -219,11 +221,13 @@ def test_transfer_fee_is_a_separate_categorized_cash_expense() -> None:
     operations = operations_with(source, catalog, destination)
 
     result = operations.transfer(
+        description="Registro de teste",
         source_account_id=source.account_id,
         destination_account_id=destination.account_id,
         amount=Money("20.00", "BRL"),
         metadata=metadata("780424e3-1914-4bbf-b8e9-949fd3431608", day=4),
         fee_allocation=fee_allocation,
+        fee_description="Tarifa de transferência",
     )
 
     assert result.fee_expense is not None
@@ -263,7 +267,7 @@ def test_income_rejects_an_expense_allocation_without_changing_the_account() -> 
     operations = operations_with(account, catalog)
 
     with pytest.raises(ValueError, match="income allocation"):
-        operations.receive_income(account.account_id, allocation)
+        operations.receive_income(account.account_id, allocation, description="Registro de teste")
 
     assert operations.account_statement(account.account_id).balance == Money("40.00", "BRL")
     assert operations.list_movements() == ()
@@ -293,7 +297,7 @@ def test_cash_expense_rejects_an_income_allocation_without_changing_the_account(
     operations = operations_with(account, catalog)
 
     with pytest.raises(ValueError, match="expense allocation"):
-        operations.pay_cash_expense(account.account_id, allocation)
+        operations.pay_cash_expense(account.account_id, allocation, description="Registro de teste")
 
     assert operations.account_statement(account.account_id).balance == Money("40.00", "BRL")
     assert operations.list_movements() == ()
@@ -328,16 +332,18 @@ def test_transfer_and_fee_are_rolled_back_together_when_persistence_fails() -> N
         metadata=metadata("9840cc9f-f43c-4aee-af0a-43c62f86b820", day=2),
     )
     operations = operations_with(source, catalog, destination)
-    operations.pay_cash_expense(source.account_id, duplicate_fee)
+    operations.pay_cash_expense(source.account_id, duplicate_fee, description="Registro de teste")
     transfer_metadata = metadata("e0242eae-de8a-479c-887b-a4f313ff0814", day=3)
 
     with pytest.raises(IntegrityError):
         operations.transfer(
+            description="Registro de teste",
             source_account_id=source.account_id,
             destination_account_id=destination.account_id,
             amount=Money("20.00", "BRL"),
             metadata=transfer_metadata,
             fee_allocation=duplicate_fee,
+            fee_description="Tarifa de transferência",
         )
 
     assert operations.account_statement(source.account_id).balance == Money("98.00", "BRL")
@@ -380,8 +386,12 @@ def test_account_statement_recalculates_balance_from_reconciled_history() -> Non
         metadata=metadata("29db4577-7da3-4310-a1a8-6e1fe1662bc7", day=3),
     )
     operations = operations_with(account, catalog)
-    income = operations.receive_income(account.account_id, income_allocation)
-    expense = operations.pay_cash_expense(account.account_id, expense_allocation)
+    income = operations.receive_income(
+        account.account_id, income_allocation, description="Registro de teste"
+    )
+    expense = operations.pay_cash_expense(
+        account.account_id, expense_allocation, description="Registro de teste"
+    )
 
     statement = operations.account_statement(account.account_id)
 
@@ -419,7 +429,7 @@ def test_archived_account_rejects_realized_movements() -> None:
     operations = operations_with(account, catalog)
 
     with pytest.raises(ValueError, match="archived"):
-        operations.receive_income(account.account_id, allocation)
+        operations.receive_income(account.account_id, allocation, description="Registro de teste")
 
     assert operations.list_movements() == ()
 
@@ -448,7 +458,7 @@ def test_cash_expense_respects_the_account_negative_balance_policy() -> None:
     operations = operations_with(account, catalog)
 
     with pytest.raises(ValueError, match="negative balance"):
-        operations.pay_cash_expense(account.account_id, allocation)
+        operations.pay_cash_expense(account.account_id, allocation, description="Registro de teste")
 
     assert operations.account_statement(account.account_id).balance == Money("1.00", "BRL")
     assert operations.list_movements() == ()

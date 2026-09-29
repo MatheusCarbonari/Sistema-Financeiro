@@ -51,6 +51,7 @@ def test_forecast_and_margin_change_only_projected_balances() -> None:
     planning, finances, account, _ = configured_scenario()
 
     occurrence = planning.create_forecast(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -81,6 +82,7 @@ def test_forecast_and_margin_change_only_projected_balances() -> None:
 def test_recurrence_generates_forecasts_and_date_only_changes_computed_status() -> None:
     planning, finances, account, _ = configured_scenario()
     recurrence = planning.create_recurrence(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.INFLOW,
         expected_amount=Money("200.00", "BRL"),
@@ -118,6 +120,7 @@ def test_recurrence_generates_forecasts_and_date_only_changes_computed_status() 
 def test_confirmation_links_existing_movement_without_counting_it_twice() -> None:
     planning, finances, account, catalog = configured_scenario()
     occurrence = planning.create_forecast(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.INFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -135,6 +138,7 @@ def test_confirmation_links_existing_movement_without_counting_it_twice() -> Non
             catalog=catalog,
             metadata=record_metadata("4e77ff95-8646-48cc-b916-21eb5e5ee268", 10),
         ),
+        description="Registro de teste",
     )
 
     confirmed = planning.confirm_occurrence(
@@ -155,11 +159,13 @@ def test_confirmation_links_existing_movement_without_counting_it_twice() -> Non
     assert projection.lines == ()
     assert projection.current_balance == Money("1120.00", "BRL")
     assert projection.projected_balance == Money("1120.00", "BRL")
-    assert planning.list_occurrences(
-        account_id=account.account_id, through_date=date(2026, 9, 30)
-    )[0] == confirmed
+    assert (
+        planning.list_occurrences(account_id=account.account_id, through_date=date(2026, 9, 30))[0]
+        == confirmed
+    )
 
     second = planning.create_forecast(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.INFLOW,
         expected_amount=Money("120.00", "BRL"),
@@ -178,6 +184,7 @@ def test_confirmation_links_existing_movement_without_counting_it_twice() -> Non
 def test_confirmation_validates_account_direction_and_currency() -> None:
     planning, finances, account, catalog = configured_scenario()
     outflow = planning.create_forecast(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("50.00", "BRL"),
@@ -194,6 +201,7 @@ def test_confirmation_validates_account_direction_and_currency() -> None:
             catalog=catalog,
             metadata=record_metadata("4e77ff95-8646-48cc-b916-21eb5e5ee268", 10),
         ),
+        description="Registro de teste",
     )
 
     with pytest.raises(ValueError, match="direction"):
@@ -207,6 +215,7 @@ def test_confirmation_validates_account_direction_and_currency() -> None:
 def test_confirmed_divergence_updates_only_later_pending_occurrences_explicitly() -> None:
     planning, finances, account, catalog = configured_scenario()
     planning.create_recurrence(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -237,6 +246,7 @@ def test_confirmed_divergence_updates_only_later_pending_occurrences_explicitly(
             catalog=catalog,
             metadata=record_metadata("4e77ff95-8646-48cc-b916-21eb5e5ee268", 15),
         ),
+        description="Registro de teste",
     )
     confirmed = planning.confirm_occurrence(
         occurrence=occurrences[0],
@@ -276,6 +286,7 @@ def test_confirmed_divergence_updates_only_later_pending_occurrences_explicitly(
 def test_single_and_following_edits_remain_separate_after_persistence() -> None:
     planning, _, account, _ = configured_scenario()
     recurrence = planning.create_recurrence(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -321,6 +332,7 @@ def test_single_and_following_edits_remain_separate_after_persistence() -> None:
 def test_cadence_edit_cannot_erase_occurrence_with_preserved_history() -> None:
     planning, _, account, _ = configured_scenario()
     recurrence = planning.create_recurrence(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -359,6 +371,7 @@ def test_cadence_edit_cannot_erase_occurrence_with_preserved_history() -> None:
 def test_confirmed_future_occurrence_keeps_original_forecast_after_series_edit() -> None:
     planning, finances, account, catalog = configured_scenario()
     recurrence = planning.create_recurrence(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -381,6 +394,7 @@ def test_confirmed_future_occurrence_keeps_original_forecast_after_series_edit()
             catalog=catalog,
             metadata=record_metadata("4e77ff95-8646-48cc-b916-21eb5e5ee268", 5),
         ),
+        description="Registro de teste",
     )
     confirmed = planning.confirm_occurrence(
         occurrence=occurrences[1],
@@ -411,6 +425,7 @@ def test_confirmed_future_occurrence_keeps_original_forecast_after_series_edit()
 def test_occurrence_date_revision_respects_query_horizon_and_rejects_collision() -> None:
     planning, _, account, _ = configured_scenario()
     planning.create_recurrence(
+        description="Registro de teste",
         account_id=account.account_id,
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),

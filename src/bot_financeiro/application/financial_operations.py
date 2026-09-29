@@ -57,7 +57,9 @@ class FinancialOperations:
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
-    def receive_income(self, account_id: UUID, allocation: Allocation) -> Income:
+    def receive_income(
+        self, account_id: UUID, allocation: Allocation, *, description: str
+    ) -> Income:
         with self._unit_of_work_factory() as unit_of_work:
             account = unit_of_work.accounts.get(account_id)
             if account is None:
@@ -66,6 +68,7 @@ class FinancialOperations:
                 account=account,
                 allocation=allocation,
                 catalog=unit_of_work.categories.catalog(),
+                description=description,
             )
             unit_of_work.allocations.add(allocation)
             unit_of_work.movements.add(income)
@@ -73,7 +76,9 @@ class FinancialOperations:
             unit_of_work.commit()
         return income
 
-    def pay_cash_expense(self, account_id: UUID, allocation: Allocation) -> CashExpense:
+    def pay_cash_expense(
+        self, account_id: UUID, allocation: Allocation, *, description: str
+    ) -> CashExpense:
         with self._unit_of_work_factory() as unit_of_work:
             account = unit_of_work.accounts.get(account_id)
             if account is None:
@@ -82,6 +87,7 @@ class FinancialOperations:
                 account=account,
                 allocation=allocation,
                 catalog=unit_of_work.categories.catalog(),
+                description=description,
             )
             unit_of_work.allocations.add(allocation)
             unit_of_work.movements.add(expense)
@@ -96,7 +102,9 @@ class FinancialOperations:
         destination_account_id: UUID,
         amount: Money,
         metadata: RecordMetadata,
+        description: str,
         fee_allocation: Allocation | None = None,
+        fee_description: str | None = None,
     ) -> TransferResult:
         with self._unit_of_work_factory() as unit_of_work:
             source = unit_of_work.accounts.get(source_account_id)
@@ -110,13 +118,17 @@ class FinancialOperations:
                 destination=destination,
                 amount=amount,
                 metadata=metadata,
+                description=description,
             )
             fee_expense = None
             if fee_allocation is not None:
+                if fee_description is None:
+                    raise ValueError("transfer fee requires a financial description")
                 fee_expense, updated_source = CashExpense.pay(
                     account=updated_source,
                     allocation=fee_allocation,
                     catalog=unit_of_work.categories.catalog(),
+                    description=fee_description,
                     related_transfer=transfer,
                 )
             unit_of_work.movements.add(transfer)

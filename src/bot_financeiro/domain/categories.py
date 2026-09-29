@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
 from bot_financeiro.domain.audit import RecordMetadata
-from bot_financeiro.domain.money import CurrencyMismatchError, Money
+from bot_financeiro.domain.money import BRL_CENT, CurrencyMismatchError, Money
 
 
 class FinancialNature(StrEnum):
@@ -119,6 +120,49 @@ class Allocation:
             self.nature,
             catalog,
             require_active=require_active,
+        )
+
+    def distribute_proportionally(self, amount: Money) -> tuple[AllocationPart, ...]:
+        """Distribute an amount using the current Rateios and a stable residual order."""
+        if amount.currency != self.total.currency:
+            raise CurrencyMismatchError(
+                "proportional distribution requires the allocation currency"
+            )
+        if amount.amount < 0:
+            raise ValueError("proportional distribution requires a non-negative amount")
+        if self.total.amount <= 0:
+            raise ValueError("proportional distribution requires a positive allocation")
+
+        parts = tuple(sorted(self.parts, key=lambda part: str(part.category_id)))
+        scale = (
+            BRL_CENT
+            if amount.currency == "BRL"
+            else Decimal(1).scaleb(
+                min(
+                    value.amount.as_tuple().exponent
+                    for value in (amount, *(part.amount for part in parts))
+                )
+            )
+        )
+        amount_units = int(amount.amount / scale)
+        total_units = sum(int(part.amount.amount / scale) for part in parts)
+        weighted = [
+            divmod(amount_units * int(part.amount.amount / scale), total_units) for part in parts
+        ]
+        shares = [base for base, _ in weighted]
+        residual_units = amount_units - sum(shares)
+        residual_order = sorted(
+            range(len(parts)),
+            key=lambda index: (-weighted[index][1], str(parts[index].category_id)),
+        )
+        for index in residual_order[:residual_units]:
+            shares[index] += 1
+        return tuple(
+            AllocationPart(
+                category_id=part.category_id,
+                amount=Money(Decimal(units) * scale, amount.currency),
+            )
+            for part, units in zip(parts, shares, strict=True)
         )
 
     @staticmethod

@@ -128,6 +128,7 @@ def test_adjustment_sets_the_real_balance_and_records_the_exact_difference() -> 
     adjustment = metadata("8ec09503-3ec5-4309-b809-45fd14adf7a2", day=2)
 
     adjusted = account.adjust_balance(
+        description="Registro de teste",
         actual_balance=Money("100.00", "BRL"),
         reason="Conciliação com o extrato",
         metadata=adjustment,
@@ -158,6 +159,7 @@ def test_adjustment_requires_a_meaningful_reason() -> None:
 
     with pytest.raises(ValueError, match="reason"):
         account.adjust_balance(
+            description="Registro de teste",
             actual_balance=Money("9.00", "BRL"),
             reason="   ",
             metadata=metadata("0fa302a4-2f32-47d5-8540-4d27382497f5", day=2),
@@ -185,6 +187,7 @@ def test_account_accepts_only_values_in_its_own_currency() -> None:
     )
     with pytest.raises(CurrencyMismatchError, match="BRL.*USD"):
         account.adjust_balance(
+            description="Registro de teste",
             actual_balance=Money("9.00", "USD"),
             reason="Conciliação",
             metadata=metadata("c385fc73-f083-429f-b4bc-3f8958f603d6", day=2),
@@ -218,6 +221,7 @@ def test_negative_adjustment_follows_the_account_policy(
 
     def adjustment() -> ResourceAccount:
         return account.adjust_balance(
+            description="Registro de teste",
             actual_balance=Money("-1.00", "BRL"),
             reason="Conciliação",
             metadata=metadata("2fb18c96-43e3-42f4-80f9-c3d5eda65944", day=2),
@@ -243,6 +247,7 @@ def test_account_can_be_archived_only_with_zero_balance() -> None:
         nonzero_account.archive()
 
     zero_account = nonzero_account.adjust_balance(
+        description="Registro de teste",
         actual_balance=Money("0.00", "BRL"),
         reason="Zerar antes do arquivamento",
         metadata=metadata("b9cb0bfc-6600-4e6e-bc77-f5b47bf06358", day=2),
@@ -265,6 +270,7 @@ def test_archived_account_rejects_adjustments_and_can_be_reactivated() -> None:
 
     with pytest.raises(ValueError, match="archived"):
         archived.adjust_balance(
+            description="Registro de teste",
             actual_balance=Money("1.00", "BRL"),
             reason="Não permitido",
             metadata=metadata("b0f194c4-033b-4482-8124-2648b4d27c09", day=2),
@@ -272,6 +278,7 @@ def test_archived_account_rejects_adjustments_and_can_be_reactivated() -> None:
 
     reactivated = archived.reactivate()
     adjusted = reactivated.adjust_balance(
+        description="Registro de teste",
         actual_balance=Money("1.00", "BRL"),
         reason="Conta em uso novamente",
         metadata=metadata("d3c5950e-e19e-4b2d-8a90-101b3771bc1c", day=3),

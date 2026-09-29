@@ -86,7 +86,9 @@ def test_credit_card_purchase_is_persisted_as_expense_and_debt_without_account_e
         metadata=metadata("04db39d5-8b13-4591-b139-ad8030e2b2d6", day=9),
     )
 
-    purchase = operations.record_purchase(card_id=card.card_id, allocation=allocation)
+    purchase = operations.record_purchase(
+        description="Registro de teste", card_id=card.card_id, allocation=allocation
+    )
 
     restored = operations.get_card(card.card_id)
     assert restored is not None
@@ -114,6 +116,7 @@ def test_installment_purchase_and_correction_round_trip_without_moving_account()
     )
     original_amount = Money("120.00", "BRL")
     purchase = operations.record_installment_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=Allocation.create(
             total=original_amount,
@@ -168,14 +171,10 @@ def test_installment_purchase_and_correction_round_trip_without_moving_account()
         Money("41.50", "BRL"),
     )
     assert cash_flow.realized_payments == ()
-    assert finances.account_statement(account.account_id).balance == Money(
-        "1000.00", "BRL"
-    )
+    assert finances.account_statement(account.account_id).balance == Money("1000.00", "BRL")
     with pytest.raises(IntegrityError, match="credit card installments are append-only"):
         with engine.begin() as connection:
-            connection.exec_driver_sql(
-                "UPDATE credit_card_installments SET amount_minor_units = 1"
-            )
+            connection.exec_driver_sql("UPDATE credit_card_installments SET amount_minor_units = 1")
 
 
 def test_installment_purchase_rolls_back_all_records_when_schedule_write_fails() -> None:
@@ -207,6 +206,7 @@ def test_installment_purchase_rolls_back_all_records_when_schedule_write_fails()
 
     with pytest.raises(IntegrityError, match="simulated schedule failure"):
         operations.record_installment_purchase(
+            description="Registro de teste",
             card_id=card.card_id,
             allocation=allocation,
             installment_count=3,
@@ -214,7 +214,9 @@ def test_installment_purchase_rolls_back_all_records_when_schedule_write_fails()
 
     with engine.begin() as connection:
         connection.exec_driver_sql("DROP TRIGGER reject_installment_schedule")
-    purchase = operations.record_purchase(card_id=card.card_id, allocation=allocation)
+    purchase = operations.record_purchase(
+        description="Registro de teste", card_id=card.card_id, allocation=allocation
+    )
     restored = operations.get_card(card.card_id)
     assert restored is not None
     assert restored.history == (card.opening, purchase)
@@ -275,6 +277,7 @@ def test_invoice_overpayment_atomically_persists_account_debt_movement_and_credi
     )
     amount = Money("100.00", "BRL")
     purchase = operations.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=Allocation.create(
             total=amount,
@@ -286,6 +289,7 @@ def test_invoice_overpayment_atomically_persists_account_debt_movement_and_credi
     )
 
     payment = operations.pay_invoice(
+        description="Registro de teste",
         card_id=card.card_id,
         closing_date=purchase.invoice_closing_date,
         account_id=account.account_id,
@@ -326,6 +330,7 @@ def test_invoice_payment_rolls_back_all_effects_when_account_save_fails() -> Non
     )
     amount = Money("100.00", "BRL")
     purchase = operations.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=Allocation.create(
             total=amount,
@@ -346,6 +351,7 @@ def test_invoice_payment_rolls_back_all_effects_when_account_save_fails() -> Non
 
     with pytest.raises(IntegrityError, match="simulated account failure"):
         operations.pay_invoice(
+            description="Registro de teste",
             card_id=card.card_id,
             closing_date=purchase.invoice_closing_date,
             account_id=account.account_id,
@@ -375,6 +381,7 @@ def test_card_history_round_trips_correction_charge_refund_and_credit_applicatio
     )
     principal = Money("200.00", "BRL")
     purchase = operations.record_purchase(
+        description="Registro de teste",
         card_id=card.card_id,
         allocation=Allocation.create(
             total=principal,
@@ -397,6 +404,7 @@ def test_card_history_round_trips_correction_charge_refund_and_credit_applicatio
     )
     charge_amount = Money("20.00", "BRL")
     operations.add_financial_charge(
+        description="Registro de teste",
         card_id=card.card_id,
         closing_date=date(2026, 10, 10),
         allocation=Allocation.create(
@@ -417,6 +425,7 @@ def test_card_history_round_trips_correction_charge_refund_and_credit_applicatio
         metadata=metadata("619502c6-536a-4432-996e-bf5ce21e753f", day=13),
     )
     operations.grant_card_credit(
+        description="Registro de teste",
         card_id=card.card_id,
         amount=Money("40.00", "BRL"),
         reason="Crédito confirmado na operadora",

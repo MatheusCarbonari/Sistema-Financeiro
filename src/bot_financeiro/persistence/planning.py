@@ -55,6 +55,7 @@ planned_occurrences = Table(
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
+    Column("description", String, nullable=True),
 )
 
 planning_recurrences = Table(
@@ -74,6 +75,7 @@ planning_recurrences = Table(
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
+    Column("description", String, nullable=True),
 )
 
 planning_recurrence_revisions = Table(
@@ -98,6 +100,7 @@ planning_recurrence_revisions = Table(
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
+    Column("description", String, nullable=True),
     UniqueConstraint("recurrence_id", "sequence"),
 )
 
@@ -128,6 +131,7 @@ planning_occurrence_events = Table(
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
+    Column("description", String, nullable=True),
     UniqueConstraint("occurrence_id", "sequence"),
 )
 
@@ -154,15 +158,14 @@ class SqlAlchemyPlanningRepository:
                 effective_date=planned.metadata.effective_date,
                 recorded_at=planned.metadata.recorded_at.isoformat(),
                 origin=planned.metadata.origin.value,
+                description=planned.description,
             )
         )
 
     def get_occurrence(self, occurrence_id: UUID) -> PlannedOccurrence | None:
         row = (
             self._session.execute(
-                select(planned_occurrences).where(
-                    planned_occurrences.c.id == str(occurrence_id)
-                )
+                select(planned_occurrences).where(planned_occurrences.c.id == str(occurrence_id))
             )
             .mappings()
             .one_or_none()
@@ -195,24 +198,17 @@ class SqlAlchemyPlanningRepository:
     def apply_history(self, occurrence: PlannedOccurrence) -> PlannedOccurrence:
         rows = tuple(
             self._session.execute(
-            select(planning_occurrence_events)
-            .where(
-                planning_occurrence_events.c.occurrence_id
-                == str(occurrence.occurrence_id)
-            )
-            .order_by(planning_occurrence_events.c.sequence)
+                select(planning_occurrence_events)
+                .where(planning_occurrence_events.c.occurrence_id == str(occurrence.occurrence_id))
+                .order_by(planning_occurrence_events.c.sequence)
             ).mappings()
         )
-        confirmation_row = next(
-            (row for row in rows if row["kind"] == "confirmed"), None
-        )
+        confirmation_row = next((row for row in rows if row["kind"] == "confirmed"), None)
         current = occurrence
         if confirmation_row is not None:
             original_metadata = RecordMetadata(
                 effective_date=confirmation_row["original_effective_date"],
-                recorded_at=datetime.fromisoformat(
-                    confirmation_row["original_recorded_at"]
-                ),
+                recorded_at=datetime.fromisoformat(confirmation_row["original_recorded_at"]),
                 origin=RecordOrigin(confirmation_row["original_origin"]),
                 record_id=occurrence.occurrence_id,
             )
@@ -230,6 +226,7 @@ class SqlAlchemyPlanningRepository:
                     confirmation_row["original_margin_value"],
                     confirmation_row["currency"],
                 ),
+                description=confirmation_row["description"],
                 metadata=original_metadata,
                 recurrence_id=occurrence.recurrence_id,
                 occurrence_id=occurrence.occurrence_id,
@@ -242,9 +239,8 @@ class SqlAlchemyPlanningRepository:
                         row["expected_minor_units"], row["currency"]
                     ),
                     planned_date=row["planned_date"],
-                    margin=_margin(
-                        row["margin_kind"], row["margin_value"], row["currency"]
-                    ),
+                    margin=_margin(row["margin_kind"], row["margin_value"], row["currency"]),
+                    description=row["description"],
                     reason=row["reason"],
                     metadata=event_metadata,
                 )
@@ -259,19 +255,19 @@ class SqlAlchemyPlanningRepository:
                         margin=current.margin,
                         recurrence_id=current.recurrence_id,
                         history=(*current.history, event),
+                        description=event.description,
                     )
                 else:
                     current = current.revise(
                         expected_amount=event.expected_amount,
                         planned_date=event.planned_date,
                         margin=event.margin,
+                        description=event.description,
                         reason=event.reason,
                         metadata=event.metadata,
                     )
             elif row["kind"] == "confirmed":
-                expected = money_from_minor_units(
-                    row["expected_minor_units"], row["currency"]
-                )
+                expected = money_from_minor_units(row["expected_minor_units"], row["currency"])
                 if current.expected_amount != expected:
                     current = PlannedOccurrence(
                         occurrence_id=current.occurrence_id,
@@ -282,6 +278,7 @@ class SqlAlchemyPlanningRepository:
                         margin=current.margin,
                         recurrence_id=current.recurrence_id,
                         history=current.history,
+                        description=current.description,
                     )
                 current = current.confirm(
                     movement_id=UUID(row["movement_id"]),
@@ -314,15 +311,14 @@ class SqlAlchemyPlanningRepository:
                 effective_date=created.metadata.effective_date,
                 recorded_at=created.metadata.recorded_at.isoformat(),
                 origin=created.metadata.origin.value,
+                description=created.description,
             )
         )
 
     def get_recurrence(self, recurrence_id: UUID) -> Recurrence | None:
         row = (
             self._session.execute(
-                select(planning_recurrences).where(
-                    planning_recurrences.c.id == str(recurrence_id)
-                )
+                select(planning_recurrences).where(planning_recurrences.c.id == str(recurrence_id))
             )
             .mappings()
             .one_or_none()
@@ -367,6 +363,7 @@ class SqlAlchemyPlanningRepository:
                     effective_date=event.metadata.effective_date,
                     recorded_at=event.metadata.recorded_at.isoformat(),
                     origin=event.metadata.origin.value,
+                    description=event.description,
                 )
             )
 
@@ -385,35 +382,21 @@ class SqlAlchemyPlanningRepository:
             select(
                 planning_occurrence_events.c.source_planned_date,
                 planning_occurrence_events.c.planned_date,
-            )
-            .where(
-                planning_occurrence_events.c.recurrence_id == str(recurrence_id)
-            )
+            ).where(planning_occurrence_events.c.recurrence_id == str(recurrence_id))
         )
         return tuple(
-            sorted(
-                {
-                    event_date
-                    for row in rows
-                    for event_date in row
-                    if event_date is not None
-                }
-            )
+            sorted({event_date for row in rows for event_date in row if event_date is not None})
         )
 
     def occurrence_source_dates(self, recurrence_id: UUID) -> tuple[date, ...]:
         rows = self._session.scalars(
             select(planning_occurrence_events.c.source_planned_date)
-            .where(
-                planning_occurrence_events.c.recurrence_id == str(recurrence_id)
-            )
+            .where(planning_occurrence_events.c.recurrence_id == str(recurrence_id))
             .order_by(planning_occurrence_events.c.source_planned_date)
         )
         return tuple(rows)
 
-    def _persisted_occurrence(
-        self, occurrence: PlannedOccurrence
-    ) -> PlannedOccurrence | None:
+    def _persisted_occurrence(self, occurrence: PlannedOccurrence) -> PlannedOccurrence | None:
         if occurrence.recurrence_id is None:
             return self.get_occurrence(occurrence.occurrence_id)
         recurrence = self.get_recurrence(occurrence.recurrence_id)
@@ -432,19 +415,20 @@ class SqlAlchemyPlanningRepository:
 
     def _occurrence(self, row: object) -> PlannedOccurrence:
         amount = money_from_minor_units(row["amount_minor_units"], row["currency"])
-        return PlannedOccurrence.plan(
+        return PlannedOccurrence.restore(
             account_id=UUID(row["account_id"]),
             direction=ForecastDirection(row["direction"]),
             expected_amount=amount,
             planned_date=row["planned_date"],
             margin=_margin(row["margin_kind"], row["margin_value"], row["currency"]),
+            description=row["description"],
             metadata=_metadata(row),
             occurrence_id=UUID(row["id"]),
         )
 
     def _recurrence(self, row: object) -> Recurrence:
         amount = money_from_minor_units(row["amount_minor_units"], row["currency"])
-        recurrence = Recurrence.create(
+        recurrence = Recurrence.restore(
             account_id=UUID(row["account_id"]),
             direction=ForecastDirection(row["direction"]),
             expected_amount=amount,
@@ -453,13 +437,12 @@ class SqlAlchemyPlanningRepository:
             frequency=RecurrenceFrequency(row["frequency"]),
             interval=row["interval"],
             margin=_margin(row["margin_kind"], row["margin_value"], row["currency"]),
+            description=row["description"],
             metadata=_metadata(row),
         )
         revisions = self._session.execute(
             select(planning_recurrence_revisions)
-            .where(
-                planning_recurrence_revisions.c.recurrence_id == row["id"]
-            )
+            .where(planning_recurrence_revisions.c.recurrence_id == row["id"])
             .order_by(planning_recurrence_revisions.c.sequence)
         ).mappings()
         for revision in revisions:
@@ -475,6 +458,7 @@ class SqlAlchemyPlanningRepository:
                 ),
                 frequency=RecurrenceFrequency(revision["frequency"]),
                 interval=revision["interval"],
+                description=revision["description"],
                 reason=revision["reason"],
                 metadata=_metadata(revision),
             )
@@ -493,6 +477,7 @@ class SqlAlchemyPlanningRepository:
             margin_kind, margin_value = _margin_values(event.margin)
             movement_id = None
             reason = event.reason
+            description = event.description
             original_values = {
                 "original_expected_minor_units": None,
                 "original_planned_date": None,
@@ -511,13 +496,10 @@ class SqlAlchemyPlanningRepository:
             movement_id = str(event.movement_id)
             reason = None
             original = occurrence.history[0]
-            original_margin_kind, original_margin_value = _margin_values(
-                original.margin
-            )
+            description = original.description
+            original_margin_kind, original_margin_value = _margin_values(original.margin)
             original_values = {
-                "original_expected_minor_units": money_to_minor_units(
-                    original.expected_amount
-                ),
+                "original_expected_minor_units": money_to_minor_units(original.expected_amount),
                 "original_planned_date": original.planned_date,
                 "original_margin_kind": original_margin_kind,
                 "original_margin_value": original_margin_value,
@@ -545,6 +527,7 @@ class SqlAlchemyPlanningRepository:
                 margin_value=margin_value,
                 movement_id=movement_id,
                 reason=reason,
+                description=description,
                 effective_date=event.metadata.effective_date,
                 recorded_at=event.metadata.recorded_at.isoformat(),
                 origin=event.metadata.origin.value,

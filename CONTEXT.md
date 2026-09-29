@@ -12,6 +12,10 @@ _Evitar_: Usuário, cliente, membro, participante
 Quantia acompanhada obrigatoriamente de sua moeda; valores em moedas diferentes não formam um total sem uma conversão explícita.
 _Evitar_: Número, valor sem moeda
 
+**Descrição financeira**:
+Texto informado pelo Titular que identifica o propósito ou a natureza concreta de um fato financeiro ou de uma Previsão financeira, independentemente de sua Categoria financeira, origem técnica ou motivo de alteração.
+_Evitar_: Categoria financeira, origem, motivo de Correção, motivo de Cancelamento, motivo de Ajuste
+
 **Conta de recursos**:
 Local financeiro do Titular que mantém dinheiro disponível em uma única moeda, como uma carteira ou conta bancária.
 _Evitar_: Fonte de dinheiro, conta de saldo

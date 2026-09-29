@@ -86,6 +86,7 @@ credit_card_history_entries = Table(
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
+    Column("description", String, nullable=True),
     CheckConstraint(
         """
         (kind = 'opened' AND amount_minor_units IS NULL AND currency IS NULL)
@@ -203,16 +204,12 @@ class SqlAlchemyCreditCardRepository:
             )
         )
         self._session.execute(
-            insert(credit_card_history_entries).values(
-                self._event_values(card.card_id, 0, opening)
-            )
+            insert(credit_card_history_entries).values(self._event_values(card.card_id, 0, opening))
         )
 
     def get(self, card_id: UUID) -> CreditCard | None:
         card_row = (
-            self._session.execute(
-                select(credit_cards).where(credit_cards.c.id == str(card_id))
-            )
+            self._session.execute(select(credit_cards).where(credit_cards.c.id == str(card_id)))
             .mappings()
             .one_or_none()
         )
@@ -231,9 +228,7 @@ class SqlAlchemyCreditCardRepository:
         limit = (
             None
             if card_row["limit_minor_units"] is None
-            else money_from_minor_units(
-                card_row["limit_minor_units"], card_row["currency"]
-            )
+            else money_from_minor_units(card_row["limit_minor_units"], card_row["currency"])
         )
         opening = CreditCardOpened(
             name=card_row["name"],
@@ -257,19 +252,21 @@ class SqlAlchemyCreditCardRepository:
         return CreditCard(history=tuple(events))
 
     def get_original_event(self, event_id: UUID) -> CreditCardEvent | None:
-        row = self._session.execute(
-            select(credit_card_history_entries).where(
-                credit_card_history_entries.c.id == str(event_id)
+        row = (
+            self._session.execute(
+                select(credit_card_history_entries).where(
+                    credit_card_history_entries.c.id == str(event_id)
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is None or row["kind"] == "opened":
             return None
         currency = row["currency"]
         if currency is None:
             currency = self._session.scalar(
-                select(credit_cards.c.currency).where(
-                    credit_cards.c.id == row["card_id"]
-                )
+                select(credit_cards.c.currency).where(credit_cards.c.id == row["card_id"])
             )
         return self._event(row, currency)
 
@@ -317,17 +314,20 @@ class SqlAlchemyCreditCardRepository:
                     card_id=UUID(row["card_id"]),
                     allocation=allocation,
                     invoice_closing_date=row["invoice_closing_date"],
+                    description=row["description"],
                 )
             if kind == "installment_purchase":
                 return InstallmentPurchase(
                     card_id=UUID(row["card_id"]),
                     allocation=allocation,
                     installments=self._installments(UUID(row["id"]), "original"),
+                    description=row["description"],
                 )
             return InvoiceFinancialCharge(
                 card_id=UUID(row["card_id"]),
                 invoice_closing_date=row["invoice_closing_date"],
                 allocation=allocation,
+                description=row["description"],
             )
         if kind == "assignment_corrected":
             return InvoiceAssignmentCorrected(
@@ -348,13 +348,10 @@ class SqlAlchemyCreditCardRepository:
                 card_id=UUID(row["card_id"]),
                 purchase_id=UUID(row["purchase_id"]),
                 corrected_allocation=allocation,
-                previous_installments=self._installments(
-                    UUID(row["id"]), "previous"
-                ),
+                previous_installments=self._installments(UUID(row["id"]), "previous"),
                 frozen_installments=self._installments(UUID(row["id"]), "frozen"),
-                replacement_installments=self._installments(
-                    UUID(row["id"]), "replacement"
-                ),
+                replacement_installments=self._installments(UUID(row["id"]), "replacement"),
+                description=row["description"],
                 reason=row["reason"],
                 metadata=event_metadata,
             )
@@ -398,6 +395,7 @@ class SqlAlchemyCreditCardRepository:
                 source_event_id=UUID(row["source_event_id"]),
                 reason=row["reason"],
                 metadata=event_metadata,
+                description=row["description"],
             )
         if kind == "credit_applied":
             return CardCreditApplied(
@@ -432,6 +430,7 @@ class SqlAlchemyCreditCardRepository:
             "target_closing_date": None,
             "source_event_id": None,
             "reason": None,
+            "description": getattr(event, "description", None),
         }
         event_metadata = event.metadata if hasattr(event, "metadata") else event.allocation.metadata
         if isinstance(event, CardPurchase):
@@ -452,9 +451,7 @@ class SqlAlchemyCreditCardRepository:
         elif isinstance(event, InstallmentPurchaseCorrected):
             values.update(
                 kind="installment_purchase_corrected",
-                amount_minor_units=money_to_minor_units(
-                    event.corrected_allocation.total
-                ),
+                amount_minor_units=money_to_minor_units(event.corrected_allocation.total),
                 currency=event.corrected_allocation.total.currency,
                 allocation_id=str(event.corrected_allocation.allocation_id),
                 purchase_id=str(event.purchase_id),
@@ -490,9 +487,7 @@ class SqlAlchemyCreditCardRepository:
             values.update(
                 kind="refund",
                 amount_minor_units=money_to_minor_units(event.amount),
-                principal_reduction_minor_units=money_to_minor_units(
-                    event.principal_reduction
-                ),
+                principal_reduction_minor_units=money_to_minor_units(event.principal_reduction),
                 currency=event.amount.currency,
                 purchase_id=str(event.purchase_id),
             )
@@ -557,9 +552,7 @@ class SqlAlchemyCreditCardRepository:
             Installment(
                 purchase_id=UUID(row["purchase_id"]),
                 sequence=row["installment_sequence"],
-                amount=money_from_minor_units(
-                    row["amount_minor_units"], row["currency"]
-                ),
+                amount=money_from_minor_units(row["amount_minor_units"], row["currency"]),
                 cycle=InvoiceCycle(
                     closing_date=row["invoice_closing_date"],
                     due_date=row["invoice_due_date"],

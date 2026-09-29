@@ -57,6 +57,14 @@ class AccountExpenseRefund:
     def reduces_expense(self) -> bool:
         return True
 
+    @property
+    def account_effects(self) -> tuple[AccountEffect, ...]:
+        return (AccountEffect(self.account_id, self.amount),)
+
+    @property
+    def debt_effects(self) -> tuple[DebtEffect, ...]:
+        return ()
+
     @classmethod
     def receive(
         cls,

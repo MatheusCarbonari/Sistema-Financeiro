@@ -63,6 +63,7 @@ financial_movements = Table(
     Column("effective_date", Date, nullable=False),
     Column("recorded_at", String, nullable=False),
     Column("origin", String(16), nullable=False),
+    Column("description", String, nullable=True),
     CheckConstraint("amount_minor_units > 0", name="ck_financial_movement_positive_amount"),
     CheckConstraint(
         """
@@ -137,6 +138,7 @@ class SqlAlchemyFinancialMovementRepository:
             "effective_date": movement.metadata.effective_date,
             "recorded_at": movement.metadata.recorded_at.isoformat(),
             "origin": movement.metadata.origin.value,
+            "description": getattr(movement, "description", None),
         }
         if isinstance(movement, AccountExpenseRefund):
             values["account_id"] = str(movement.account_id)
@@ -221,6 +223,7 @@ class SqlAlchemyFinancialMovementRepository:
                     row["applied_amount_minor_units"], row["currency"]
                 ),
                 metadata=movement_metadata,
+                description=row["description"],
             )
         if row["kind"] == "bill_payment":
             return BillPayment(
@@ -228,6 +231,7 @@ class SqlAlchemyFinancialMovementRepository:
                 account_id=UUID(row["account_id"]),
                 amount=amount,
                 metadata=movement_metadata,
+                description=row["description"],
             )
         if row["kind"] == "transfer":
             return Transfer(
@@ -235,6 +239,7 @@ class SqlAlchemyFinancialMovementRepository:
                 destination_account_id=UUID(row["destination_account_id"]),
                 amount=amount,
                 metadata=movement_metadata,
+                description=row["description"],
             )
         allocation = SqlAlchemyAllocationRepository(self._session).get(UUID(row["allocation_id"]))
         if allocation is None:
@@ -242,7 +247,11 @@ class SqlAlchemyFinancialMovementRepository:
         if allocation.total != amount or allocation.metadata != movement_metadata:
             raise ValueError("financial movement diverges from its allocation")
         if row["kind"] == "income":
-            return Income(account_id=UUID(row["account_id"]), allocation=allocation)
+            return Income(
+                account_id=UUID(row["account_id"]),
+                allocation=allocation,
+                description=row["description"],
+            )
         if row["kind"] == "cash_expense":
             related_transfer_id = (
                 None if row["related_transfer_id"] is None else UUID(row["related_transfer_id"])
@@ -252,6 +261,7 @@ class SqlAlchemyFinancialMovementRepository:
             return CashExpense(
                 account_id=UUID(row["account_id"]),
                 allocation=allocation,
+                description=row["description"],
                 related_transfer_id=related_transfer_id,
             )
         raise ValueError(f"unknown financial movement kind: {row['kind']}")

@@ -86,12 +86,15 @@ class CreditCardOperations:
         with self._unit_of_work_factory() as unit_of_work:
             return unit_of_work.credit_cards.get(card_id)
 
-    def record_purchase(self, *, card_id: UUID, allocation: Allocation) -> CardPurchase:
+    def record_purchase(
+        self, *, card_id: UUID, allocation: Allocation, description: str
+    ) -> CardPurchase:
         with self._unit_of_work_factory() as unit_of_work:
             card = self._card(unit_of_work, card_id)
             purchase, updated = card.purchase(
                 allocation=allocation,
                 catalog=unit_of_work.categories.catalog(),
+                description=description,
             )
             unit_of_work.allocations.add(allocation)
             unit_of_work.credit_cards.save(updated)
@@ -104,6 +107,7 @@ class CreditCardOperations:
         card_id: UUID,
         allocation: Allocation,
         installment_count: int,
+        description: str,
     ) -> InstallmentPurchase:
         with self._unit_of_work_factory() as unit_of_work:
             card = self._card(unit_of_work, card_id)
@@ -111,6 +115,7 @@ class CreditCardOperations:
                 allocation=allocation,
                 installment_count=installment_count,
                 catalog=unit_of_work.categories.catalog(),
+                description=description,
             )
             unit_of_work.allocations.add(allocation)
             unit_of_work.credit_cards.save(updated)
@@ -125,6 +130,7 @@ class CreditCardOperations:
         account_id: UUID,
         amount: Money,
         metadata: RecordMetadata,
+        description: str,
         create_credit_from_excess: bool = False,
     ) -> InvoicePayment:
         with self._unit_of_work_factory() as unit_of_work:
@@ -137,6 +143,7 @@ class CreditCardOperations:
                 account=account,
                 amount=amount,
                 metadata=metadata,
+                description=description,
                 create_credit_from_excess=create_credit_from_excess,
             )
             unit_of_work.movements.add(payment)
@@ -151,6 +158,7 @@ class CreditCardOperations:
         card_id: UUID,
         closing_date: date,
         allocation: Allocation,
+        description: str,
     ) -> InvoiceFinancialCharge:
         with self._unit_of_work_factory() as unit_of_work:
             card = self._card(unit_of_work, card_id)
@@ -158,6 +166,7 @@ class CreditCardOperations:
                 closing_date=closing_date,
                 allocation=allocation,
                 catalog=unit_of_work.categories.catalog(),
+                description=description,
             )
             unit_of_work.allocations.add(allocation)
             unit_of_work.credit_cards.save(updated)
@@ -169,6 +178,7 @@ class CreditCardOperations:
         *,
         card_id: UUID,
         amount: Money,
+        description: str,
         reason: str,
         metadata: RecordMetadata,
     ) -> CardCreditGranted:
@@ -176,6 +186,7 @@ class CreditCardOperations:
             card = self._card(unit_of_work, card_id)
             credit, updated = card.grant_card_credit(
                 amount=amount,
+                description=description,
                 reason=reason,
                 metadata=metadata,
             )

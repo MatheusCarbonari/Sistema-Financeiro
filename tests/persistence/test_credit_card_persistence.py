@@ -58,10 +58,7 @@ def test_migration_0005_preserves_existing_resource_account_data() -> None:
             (account_id,),
         ).one()
         movement_columns = {
-            row[1]
-            for row in connection.exec_driver_sql(
-                "PRAGMA table_info(financial_movements)"
-            )
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(financial_movements)")
         }
 
     assert account == ("Conta anterior", 10000)
@@ -108,9 +105,7 @@ def test_migration_0006_preserves_existing_credit_card_history() -> None:
         ).one()
         installment_columns = {
             row[1]
-            for row in connection.exec_driver_sql(
-                "PRAGMA table_info(credit_card_installments)"
-            )
+            for row in connection.exec_driver_sql("PRAGMA table_info(credit_card_installments)")
         }
 
     assert card == ("Cartão anterior", 100000)

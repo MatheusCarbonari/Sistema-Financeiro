@@ -53,6 +53,7 @@ def test_opening_payable_recognizes_expense_without_changing_resource_account_ba
     )
 
     payable = Payable.open(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
         catalog=catalog,
@@ -83,6 +84,7 @@ def test_passing_due_date_only_changes_calculated_status() -> None:
         metadata=metadata("9d38d8e3-e0de-446d-8fa3-ec0d2056265f", day=2),
     )
     payable = Payable.open(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
         catalog=catalog,
@@ -116,6 +118,7 @@ def test_partial_payment_reduces_debt_and_account_balance_without_new_expense() 
         metadata=metadata("c907a4f7-fcc9-4db7-a7ce-d5d98c5a3278", day=2),
     )
     payable = Payable.open(
+        description="Registro de teste",
         allocation=allocation,
         due_date=date(2026, 9, 10),
         catalog=catalog,
@@ -126,6 +129,7 @@ def test_partial_payment_reduces_debt_and_account_balance_without_new_expense() 
         account=account,
         amount=Money("100.00", "BRL"),
         metadata=payment_metadata,
+        description="Pagamento da conta",
     )
 
     assert isinstance(payment, BillPayment)
@@ -160,6 +164,7 @@ def test_financial_charge_is_a_separate_expense_that_increases_amount_due() -> N
         metadata=metadata("51d66046-d38b-4457-9768-a2cbf4e24baa", day=2),
     )
     payable = Payable.open(
+        description="Registro de teste",
         allocation=principal,
         due_date=date(2026, 9, 10),
         catalog=catalog,
@@ -173,6 +178,7 @@ def test_financial_charge_is_a_separate_expense_that_increases_amount_due() -> N
     )
 
     charge, charged = payable.add_financial_charge(
+        description="Registro de teste",
         allocation=charge_allocation,
         catalog=catalog,
     )
@@ -210,6 +216,7 @@ def payable_with_account() -> tuple[Payable, ResourceAccount, CategoryCatalog, U
     )
     return (
         Payable.open(
+            description="Registro de teste",
             allocation=allocation,
             due_date=date(2026, 9, 10),
             catalog=catalog,
@@ -227,6 +234,7 @@ def test_total_payment_marks_payable_as_paid_without_repeating_principal_expense
         account=account,
         amount=Money("300.00", "BRL"),
         metadata=metadata("4f4e555b-7491-4753-9928-e39935262319", day=5),
+        description="Pagamento da conta",
     )
 
     assert paid.amount_due == Money("0.00", "BRL")
@@ -244,6 +252,7 @@ def test_payment_cannot_exceed_amount_due() -> None:
             account=account,
             amount=Money("300.01", "BRL"),
             metadata=metadata("61245513-6372-48cb-9f22-7456cf1cb7db", day=5),
+            description="Pagamento da conta",
         )
 
     assert payable.amount_due == Money("300.00", "BRL")
@@ -256,6 +265,7 @@ def test_paid_payable_rejects_new_financial_charge() -> None:
         account=account,
         amount=Money("300.00", "BRL"),
         metadata=metadata("a9279e87-b3d6-48d2-b9a2-cdc92a9fdab8", day=5),
+        description="Pagamento da conta",
     )
     charge = Allocation.create(
         total=Money("1.00", "BRL"),
@@ -266,7 +276,9 @@ def test_paid_payable_rejects_new_financial_charge() -> None:
     )
 
     with pytest.raises(ValueError, match="paid payable"):
-        paid.add_financial_charge(allocation=charge, catalog=catalog)
+        paid.add_financial_charge(
+            description="Registro de teste", allocation=charge, catalog=catalog
+        )
 
 
 def test_amount_due_combines_original_charge_and_payment_exactly() -> None:
@@ -279,6 +291,7 @@ def test_amount_due_combines_original_charge_and_payment_exactly() -> None:
         metadata=metadata("e3bf60f8-7931-47ca-a3a4-596d03b2c2e9", day=4),
     )
     charge, charged = payable.add_financial_charge(
+        description="Registro de teste",
         allocation=charge_allocation,
         catalog=catalog,
     )
@@ -287,6 +300,7 @@ def test_amount_due_combines_original_charge_and_payment_exactly() -> None:
         account=account,
         amount=Money("100.00", "BRL"),
         metadata=metadata("ba4a2ba9-50e4-449c-bb3f-3f1dde1e7516", day=5),
+        description="Pagamento da conta",
     )
 
     assert current.amount_due == Money("220.00", "BRL")
@@ -310,6 +324,7 @@ def test_payable_and_financial_charge_require_expense_allocations() -> None:
 
     with pytest.raises(ValueError, match="expense allocation"):
         Payable.open(
+            description="Registro de teste",
             allocation=income_allocation,
             due_date=date(2026, 9, 10),
             catalog=catalog,
@@ -318,8 +333,7 @@ def test_payable_and_financial_charge_require_expense_allocations() -> None:
     payable, _, expense_catalog, _ = payable_with_account()
     with pytest.raises(ValueError, match="expense allocation"):
         payable.add_financial_charge(
+            description="Registro de teste",
             allocation=income_allocation,
-            catalog=CategoryCatalog(
-                categories=(*expense_catalog.categories, *catalog.categories)
-            ),
+            catalog=CategoryCatalog(categories=(*expense_catalog.categories, *catalog.categories)),
         )

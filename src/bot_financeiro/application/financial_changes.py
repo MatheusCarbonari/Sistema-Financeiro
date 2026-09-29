@@ -224,13 +224,15 @@ class _FinancialFactChangeOperations:
             history = unit_of_work.changes.history(target_id)
             current = self._active(history)
             self._ensure_supported_change(current, operation="corrected")
-            replacement = normalize_financial_fact_replacement(target_id, replacement)
+            replacement = normalize_financial_fact_replacement(
+                target_id,
+                current,
+                replacement,
+            )
             self._validate_replacement(current, replacement, unit_of_work)
             blockers = self._dependency_blockers(target_id, replacement.amount, unit_of_work)
             blockers += financial_fact_change_blockers(current, replacement, unit_of_work)
-            impact = self._proposal_impact(
-                target_id, current, replacement, blockers, unit_of_work
-            )
+            impact = self._proposal_impact(target_id, current, replacement, blockers, unit_of_work)
             return CorrectionProposal(
                 target_id=target_id,
                 expected_version_id=history.version_id,
@@ -251,9 +253,7 @@ class _FinancialFactChangeOperations:
             blockers = self._dependency_blockers(
                 proposal.target_id, proposal.replacement.amount, unit_of_work
             )
-            blockers += financial_fact_change_blockers(
-                current, proposal.replacement, unit_of_work
-            )
+            blockers += financial_fact_change_blockers(current, proposal.replacement, unit_of_work)
             expected_impact = self._proposal_impact(
                 proposal.target_id,
                 current,
@@ -336,6 +336,7 @@ class _FinancialFactChangeOperations:
             unit_of_work.commit()
             return cancellation
 
+
 class _AccountExpenseRefundOperations:
     def preview_account_refund(
         self, target_id: UUID, *, account_id: UUID, amount: Money
@@ -345,9 +346,7 @@ class _AccountExpenseRefundOperations:
             current = self._active(history)
             if not self._is_expense_fact(current):
                 raise ValueError("account refund requires an expense")
-            current_expense = self._current_expense_amount(
-                current, target_id, unit_of_work
-            )
+            current_expense = self._current_expense_amount(current, target_id, unit_of_work)
             account = unit_of_work.accounts.get(account_id)
             if account is None:
                 raise LookupError(f"resource account {account_id} does not exist")
@@ -369,9 +368,7 @@ class _AccountExpenseRefundOperations:
             return RefundProposal(
                 target_id=target_id,
                 expected_version_id=history.version_id,
-                expected_related_version_id=self._related_version_id(
-                    current, unit_of_work
-                ),
+                expected_related_version_id=self._related_version_id(current, unit_of_work),
                 account_id=account_id,
                 amount=amount,
                 expected_refunded_amount=already_refunded,
@@ -410,9 +407,7 @@ class _AccountExpenseRefundOperations:
                 )
             )
             ensure_registration_order(metadata, *previous_metadata)
-            already_refunded = self._all_refund_total(
-                current, proposal.target_id, unit_of_work
-            )
+            already_refunded = self._all_refund_total(current, proposal.target_id, unit_of_work)
             if already_refunded != proposal.expected_refunded_amount:
                 raise ValueError("account refund proposal is obsolete")
             blockers = self._refund_blockers(
@@ -445,6 +440,7 @@ class _AccountExpenseRefundOperations:
             unit_of_work.accounts.save(updated_account)
             unit_of_work.commit()
             return refund
+
 
 class _CreditCardFinancialChangeOperations:
     def preview_card_refund(
@@ -492,12 +488,8 @@ class _CreditCardFinancialChangeOperations:
                         DebtImpact(
                             owner_id=card_id,
                             current_effect=Money("0", amount.currency),
-                            proposed_effect=Money(
-                                -principal_reduction.amount, amount.currency
-                            ),
-                            net_change=Money(
-                                -principal_reduction.amount, amount.currency
-                            ),
+                            proposed_effect=Money(-principal_reduction.amount, amount.currency),
+                            net_change=Money(-principal_reduction.amount, amount.currency),
                         ),
                     ),
                     blockers=blockers,
@@ -556,9 +548,7 @@ class _CreditCardFinancialChangeOperations:
                     assessment.replacement_installments,
                 ),
                 impact=FinancialImpactPreview(
-                    description=(
-                        "Correct only open installments; affected cycles remain frozen."
-                    ),
+                    description=("Correct only open installments; affected cycles remain frozen."),
                     expense=ExpenseImpact(
                         gross_before=before,
                         gross_after=after,
@@ -772,6 +762,7 @@ class _CreditCardFinancialChangeOperations:
             unit_of_work.commit()
             return refund
 
+
 class _FinancialChangeQueries:
     def get_history(self, target_id: UUID) -> FinancialFactHistory[ChangeableFinancialFact]:
         with self._unit_of_work_factory() as unit_of_work:
@@ -817,6 +808,7 @@ class _FinancialChangeQueries:
                 refunded,
                 Money(gross.amount - refunded.amount, gross.currency),
             )
+
 
 class _FinancialChangeSupport:
     @staticmethod
@@ -958,9 +950,7 @@ class _FinancialChangeSupport:
             try:
                 account.balance_after_fact_change(impact.net_change)
             except ValueError as error:
-                blockers.append(
-                    f"resource account would reject the financial change: {error}"
-                )
+                blockers.append(f"resource account would reject the financial change: {error}")
         return tuple(blockers)
 
     @staticmethod
@@ -1141,9 +1131,7 @@ class _FinancialChangeSupport:
         return purchase
 
     @staticmethod
-    def _current_card_expense(
-        card, purchase: CardPurchase | InstallmentPurchase
-    ) -> Money:
+    def _current_card_expense(card, purchase: CardPurchase | InstallmentPurchase) -> Money:
         if isinstance(purchase, InstallmentPurchase):
             return card.expense_for_purchase(purchase.purchase_id).total
         return purchase.amount

@@ -32,12 +32,8 @@ def test_safety_margin_is_explicit_exact_and_direction_aware() -> None:
 
     assert fixed.amount_for(expected) == Money("10.00", "BRL")
     assert percentage.amount_for(expected) == Money("12.35", "BRL")
-    assert fixed.conservative_impact(expected, ForecastDirection.OUTFLOW) == Money(
-        "-110.00", "BRL"
-    )
-    assert fixed.conservative_impact(expected, ForecastDirection.INFLOW) == Money(
-        "90.00", "BRL"
-    )
+    assert fixed.conservative_impact(expected, ForecastDirection.OUTFLOW) == Money("-110.00", "BRL")
+    assert fixed.conservative_impact(expected, ForecastDirection.INFLOW) == Money("90.00", "BRL")
     assert SafetyMargin.fixed(Money("150.00", "BRL")).conservative_impact(
         expected, ForecastDirection.INFLOW
     ) == Money("0.00", "BRL")
@@ -54,6 +50,7 @@ def test_margin_rejects_invalid_values_and_currency() -> None:
 
 def test_occurrence_becomes_overdue_only_after_planned_date() -> None:
     occurrence = PlannedOccurrence.plan(
+        description="Registro de teste",
         account_id=UUID("c78897c8-a99a-4f81-8d91-ab3d7e08ae5a"),
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("80.00", "BRL"),
@@ -72,6 +69,7 @@ def test_new_forecast_and_recurrence_must_start_in_the_future() -> None:
     account_id = UUID("c78897c8-a99a-4f81-8d91-ab3d7e08ae5a")
     with pytest.raises(ValueError, match="future"):
         PlannedOccurrence.plan(
+            description="Registro de teste",
             account_id=account_id,
             direction=ForecastDirection.OUTFLOW,
             expected_amount=Money("80.00", "BRL"),
@@ -81,6 +79,7 @@ def test_new_forecast_and_recurrence_must_start_in_the_future() -> None:
         )
     with pytest.raises(ValueError, match="future"):
         Recurrence.create(
+            description="Registro de teste",
             account_id=account_id,
             direction=ForecastDirection.OUTFLOW,
             expected_amount=Money("80.00", "BRL"),
@@ -95,6 +94,7 @@ def test_new_forecast_and_recurrence_must_start_in_the_future() -> None:
 
 def test_confirmation_keeps_occurrence_as_forecast_and_records_divergence() -> None:
     occurrence = PlannedOccurrence.plan(
+        description="Registro de teste",
         account_id=UUID("c78897c8-a99a-4f81-8d91-ab3d7e08ae5a"),
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("80.00", "BRL"),
@@ -127,6 +127,7 @@ def test_confirmation_keeps_occurrence_as_forecast_and_records_divergence() -> N
 
 def test_only_future_unconfirmed_occurrence_can_be_revised() -> None:
     occurrence = PlannedOccurrence.plan(
+        description="Registro de teste",
         account_id=UUID("c78897c8-a99a-4f81-8d91-ab3d7e08ae5a"),
         direction=ForecastDirection.INFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -158,6 +159,7 @@ def test_only_future_unconfirmed_occurrence_can_be_revised() -> None:
 
 def test_monthly_recurrence_clamps_month_end_without_drifting() -> None:
     recurrence = Recurrence.create(
+        description="Registro de teste",
         account_id=UUID("c78897c8-a99a-4f81-8d91-ab3d7e08ae5a"),
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("50.00", "BRL"),
@@ -182,6 +184,7 @@ def test_monthly_recurrence_clamps_month_end_without_drifting() -> None:
 
 def test_recurrence_revision_preserves_earlier_segment() -> None:
     recurrence = Recurrence.create(
+        description="Registro de teste",
         account_id=UUID("c78897c8-a99a-4f81-8d91-ab3d7e08ae5a"),
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -213,6 +216,7 @@ def test_recurrence_revision_preserves_earlier_segment() -> None:
 
 def test_recurrence_revision_can_change_cadence_only_from_selected_occurrence() -> None:
     recurrence = Recurrence.create(
+        description="Registro de teste",
         account_id=UUID("c78897c8-a99a-4f81-8d91-ab3d7e08ae5a"),
         direction=ForecastDirection.OUTFLOW,
         expected_amount=Money("100.00", "BRL"),
@@ -234,9 +238,7 @@ def test_recurrence_revision_can_change_cadence_only_from_selected_occurrence() 
         metadata=metadata("94b6f5c4-3535-4fa4-8618-a2b67d91dd48", 10),
     )
 
-    assert tuple(
-        item.planned_date for item in revised.occurrences_through(date(2027, 1, 5))
-    ) == (
+    assert tuple(item.planned_date for item in revised.occurrences_through(date(2027, 1, 5))) == (
         date(2026, 10, 5),
         date(2026, 11, 5),
         date(2026, 12, 5),

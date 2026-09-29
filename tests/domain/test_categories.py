@@ -344,3 +344,32 @@ def test_catalog_cannot_be_reconstructed_with_an_invalid_tree() -> None:
 
     with pytest.raises(ValueError, match="parent"):
         CategoryCatalog(categories=(orphan,))
+
+
+def test_allocation_distributes_an_amount_proportionally_in_stable_exact_order() -> None:
+    first_id = UUID("00000000-0000-0000-0000-000000000001")
+    second_id = UUID("00000000-0000-0000-0000-000000000002")
+    allocation = Allocation(
+        allocation_id=UUID("00000000-0000-0000-0000-000000000003"),
+        total=Money("30.00", "BRL"),
+        nature=FinancialNature.EXPENSE,
+        parts=(
+            AllocationPart(second_id, Money("10.00", "BRL")),
+            AllocationPart(first_id, Money("20.00", "BRL")),
+        ),
+        metadata=metadata("00000000-0000-0000-0000-000000000003"),
+    )
+
+    distributed = allocation.distribute_proportionally(Money("10.01", "BRL"))
+
+    assert distributed == (
+        AllocationPart(first_id, Money("6.67", "BRL")),
+        AllocationPart(second_id, Money("3.34", "BRL")),
+    )
+    assert (
+        sum(
+            (part.amount.amount for part in distributed),
+            start=Money("0", "BRL").amount,
+        )
+        == Money("10.01", "BRL").amount
+    )
