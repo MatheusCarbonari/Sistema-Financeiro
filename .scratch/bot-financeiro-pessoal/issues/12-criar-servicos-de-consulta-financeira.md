@@ -52,3 +52,14 @@ Produzir consultas reconciliáveis que distingam dinheiro, dívida, patrimônio,
 - Correções usam a versão financeira vigente, Cancelamentos retiram os efeitos atuais e moedas diferentes permanecem separadas.
 - As Partes 3–4 e a validação integrada continuam pendentes.
 
+### Parte 3 — concluída, Ticket permanece aberto
+
+- `FinancialQueries` delega posição de Cartões, Contas a pagar, Compromissos e fluxo de caixa realizado a quatro colaboradores de consulta.
+- A posição do Cartão separa principal pendente, Encargos, Crédito disponível, dívida líquida e Limite disponível, com Faturas e componentes reconciliáveis calculados pelo domínio.
+- Faturas exibem apenas suas Parcelas e explicam o saldo pendente após pagamentos, Reembolsos e Créditos aplicados, sem duplicar a dívida da Compra parcelada.
+- Compromissos mantêm dívidas reconhecidas separadas de Previsões, incluem pendências atrasadas e limitam ocorrências futuras ao horizonte solicitado.
+- O fluxo de caixa usa Data efetiva e expõe Momento do registro; Transferências internas permanecem no detalhe, mas não afetam totais globais.
+- Consultas individuais por Conta incluem a respectiva perna da Transferência nos totais da Conta.
+- Moedas permanecem separadas e nenhum cálculo de dívida ou Fatura concorrente foi introduzido.
+- A Parte 4 e a validação integrada continuam pendentes.
+

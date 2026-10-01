@@ -31,6 +31,7 @@ from bot_financeiro.persistence.categories import SqlAlchemyFinancialCategoryRep
 from bot_financeiro.persistence.credit_cards import (
     SqlAlchemyCreditCardRepository,
     credit_card_history_entries,
+    credit_cards,
 )
 from bot_financeiro.persistence.financial_changes import (
     SqlAlchemyFinancialChangeRepository,
@@ -42,7 +43,9 @@ from bot_financeiro.persistence.financial_operations import (
 from bot_financeiro.persistence.payables import (
     SqlAlchemyPayableRepository,
     payable_history_entries,
+    payables,
 )
+from bot_financeiro.persistence.planning import SqlAlchemyPlanningRepository
 from bot_financeiro.persistence.resource_accounts import (
     SqlAlchemyResourceAccountRepository,
     resource_accounts,
@@ -79,6 +82,47 @@ class SqlAlchemyFinancialQuerySource:
             account
             for account_id in account_ids
             if (account := repository.get(UUID(account_id))) is not None
+        )
+
+    def get_credit_card(self, card_id: UUID):
+        return SqlAlchemyCreditCardRepository(self.session).get(card_id)
+
+    def list_credit_cards(self):
+        card_ids = self.session.scalars(select(credit_cards.c.id).order_by(credit_cards.c.id))
+        repository = SqlAlchemyCreditCardRepository(self.session)
+        return tuple(
+            card for card_id in card_ids if (card := repository.get(UUID(card_id))) is not None
+        )
+
+    def list_payables(self):
+        payable_ids = self.session.scalars(select(payables.c.id).order_by(payables.c.id))
+        repository = SqlAlchemyPayableRepository(self.session)
+        return tuple(
+            payable
+            for payable_id in payable_ids
+            if (payable := repository.get(UUID(payable_id))) is not None
+        )
+
+    def list_planned_occurrences(self, through_date):
+        repository = SqlAlchemyPlanningRepository(self.session)
+        standalone = tuple(
+            occurrence
+            for occurrence in repository.list_standalone_occurrences()
+            if occurrence.planned_date <= through_date
+        )
+        generated = tuple(
+            repository.apply_history(occurrence)
+            for recurrence in repository.list_recurrences()
+            for occurrence in recurrence.occurrences_through(
+                max((through_date, *repository.occurrence_source_dates(recurrence.recurrence_id)))
+            )
+            if occurrence.planned_date <= through_date
+        )
+        return tuple(
+            sorted(
+                (*standalone, *generated),
+                key=lambda item: (item.planned_date, str(item.occurrence_id)),
+            )
         )
 
     def list_movement_histories(
@@ -229,6 +273,19 @@ class SqlAlchemyFinancialQuerySource:
                 description=card.description_for_purchase(current.purchase_id),
             )
         return current
+
+    def financial_fact_version_recorded_at(self, fact_id: UUID) -> datetime | None:
+        changes = SqlAlchemyFinancialChangeRepository(
+            self.session,
+            original_non_movement_loader=self._original_non_movement,
+        )
+        try:
+            history = changes.history(fact_id)
+        except LookupError:
+            return None
+        if history.events:
+            return history.events[-1].metadata.recorded_at
+        return history.original.metadata.recorded_at
 
     def _original_non_movement(self, fact_id: UUID):
         payable_event = SqlAlchemyPayableRepository(self.session).get_original_event(fact_id)

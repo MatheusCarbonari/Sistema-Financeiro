@@ -248,6 +248,10 @@ def test_installment_purchase_correction_replaces_only_open_installments() -> No
     )
     assert corrected.expense_for_purchase(purchase.purchase_id) == corrected_allocation
     assert corrected.invoice(date(2026, 9, 10)).installments == (purchase.installments[0],)
+    assert (
+        corrected.invoice(date(2026, 10, 10)).components[0].recorded_at
+        == correction.metadata.recorded_at
+    )
     assert corrected.available_limit == Money("397.00", "BRL")
 
 

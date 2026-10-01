@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from calendar import monthrange
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -24,6 +24,15 @@ class InvoiceStatus(StrEnum):
     PARTIALLY_PAID = "partially_paid"
     PAID = "paid"
     OVERDUE = "overdue"
+
+
+class InvoiceComponentKind(StrEnum):
+    PURCHASE = "purchase"
+    INSTALLMENT = "installment"
+    FINANCIAL_CHARGE = "financial_charge"
+    PAYMENT = "payment"
+    REFUND = "refund"
+    CREDIT_APPLIED = "credit_applied"
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +354,10 @@ class CardCreditGranted:
     def is_income(self) -> bool:
         return False
 
+    @property
+    def credit_effect(self) -> Money:
+        return self.amount
+
 
 @dataclass(frozen=True, slots=True)
 class CardCreditApplied:
@@ -365,6 +378,27 @@ class CardCreditApplied:
     def is_income(self) -> bool:
         return False
 
+    @property
+    def credit_effect(self) -> Money:
+        return Money(-self.amount.amount, self.amount.currency)
+
+
+@dataclass(frozen=True, slots=True)
+class InvoiceDebtComponent:
+    event_id: UUID
+    kind: InvoiceComponentKind
+    effective_date: date
+    recorded_at: datetime
+    principal_effect: Money
+    financial_charge_effect: Money
+    description: str | None = None
+    purchase_id: UUID | None = None
+    installment_sequence: int | None = None
+
+    @property
+    def total_effect(self) -> Money:
+        return self.principal_effect + self.financial_charge_effect
+
 
 @dataclass(frozen=True, slots=True)
 class Invoice:
@@ -374,6 +408,16 @@ class Invoice:
     financial_charges_due: Money
     has_settlement: bool = False
     installments: tuple[Installment, ...] = ()
+    components: tuple[InvoiceDebtComponent, ...] = ()
+
+    def __post_init__(self) -> None:
+        principal = Money("0", self.principal_due.currency)
+        charges = Money("0", self.financial_charges_due.currency)
+        for component in self.components:
+            principal += component.principal_effect
+            charges += component.financial_charge_effect
+        if principal != self.principal_due or charges != self.financial_charges_due:
+            raise ValueError("invoice components must reconcile its pending debt")
 
     @property
     def amount_due(self) -> Money:
@@ -536,10 +580,8 @@ class CreditCard:
     def card_credit_balance(self) -> Money:
         balance = Money("0", self.currency)
         for event in self.history:
-            if isinstance(event, CardCreditGranted):
-                balance += event.amount
-            elif isinstance(event, CardCreditApplied):
-                balance = Money(balance.amount - event.amount.amount, balance.currency)
+            if isinstance(event, (CardCreditGranted, CardCreditApplied)):
+                balance += event.credit_effect
                 if balance.amount < 0:
                     raise ValueError("card credit application exceeds available credit")
         return balance
@@ -1073,6 +1115,7 @@ class CreditCard:
         charges = Money("0", self.currency)
         has_settlement = False
         installments: list[Installment] = []
+        components: list[InvoiceDebtComponent] = []
         for purchase in (event for event in self.history if isinstance(event, InstallmentPurchase)):
             for installment in self.installments_for_purchase(
                 purchase.purchase_id,
@@ -1081,6 +1124,19 @@ class CreditCard:
                 if installment.cycle.closing_date == closing_date:
                     principal += installment.amount
                     installments.append(installment)
+                    components.append(
+                        InvoiceDebtComponent(
+                            event_id=purchase.purchase_id,
+                            kind=InvoiceComponentKind.INSTALLMENT,
+                            effective_date=purchase.metadata.effective_date,
+                            recorded_at=self._purchase_version_recorded_at(purchase.purchase_id),
+                            principal_effect=installment.amount,
+                            financial_charge_effect=Money("0", self.currency),
+                            description=self.description_for_purchase(purchase.purchase_id),
+                            purchase_id=purchase.purchase_id,
+                            installment_sequence=installment.sequence,
+                        )
+                    )
         for event in self.history:
             if (
                 through_effective_date is not None
@@ -1092,6 +1148,18 @@ class CreditCard:
                 and self._purchase_closing_date(event) == closing_date
             ):
                 principal += event.amount
+                components.append(
+                    InvoiceDebtComponent(
+                        event_id=event.event_id,
+                        kind=InvoiceComponentKind.PURCHASE,
+                        effective_date=event.metadata.effective_date,
+                        recorded_at=self._purchase_version_recorded_at(event.purchase_id),
+                        principal_effect=event.amount,
+                        financial_charge_effect=Money("0", self.currency),
+                        description=event.description,
+                        purchase_id=event.purchase_id,
+                    )
+                )
             elif (
                 isinstance(event, CardRefund)
                 and event.principal_reduction.amount > 0
@@ -1103,22 +1171,71 @@ class CreditCard:
                     principal.amount - event.principal_reduction.amount,
                     principal.currency,
                 )
+                components.append(
+                    InvoiceDebtComponent(
+                        event_id=event.event_id,
+                        kind=InvoiceComponentKind.REFUND,
+                        effective_date=event.metadata.effective_date,
+                        recorded_at=event.metadata.recorded_at,
+                        principal_effect=Money(
+                            -event.principal_reduction.amount,
+                            self.currency,
+                        ),
+                        financial_charge_effect=Money("0", self.currency),
+                        description=self._purchase(event.purchase_id).description,
+                        purchase_id=event.purchase_id,
+                    )
+                )
             elif (
                 isinstance(event, InvoiceFinancialCharge)
                 and event.invoice_closing_date == closing_date
             ):
                 charges += event.amount
+                components.append(
+                    InvoiceDebtComponent(
+                        event_id=event.event_id,
+                        kind=InvoiceComponentKind.FINANCIAL_CHARGE,
+                        effective_date=event.metadata.effective_date,
+                        recorded_at=event.metadata.recorded_at,
+                        principal_effect=Money("0", self.currency),
+                        financial_charge_effect=event.amount,
+                        description=event.description,
+                    )
+                )
             elif (
                 isinstance(event, (InvoicePayment, CardCreditApplied))
                 and event.invoice_closing_date == closing_date
             ):
                 amount = event.applied_amount if isinstance(event, InvoicePayment) else event.amount
+                previous_principal = principal
+                previous_charges = charges
                 principal, charges = _apply_settlement(
                     principal,
                     charges,
                     amount,
                 )
                 has_settlement = True
+                components.append(
+                    InvoiceDebtComponent(
+                        event_id=event.event_id,
+                        kind=(
+                            InvoiceComponentKind.PAYMENT
+                            if isinstance(event, InvoicePayment)
+                            else InvoiceComponentKind.CREDIT_APPLIED
+                        ),
+                        effective_date=event.metadata.effective_date,
+                        recorded_at=event.metadata.recorded_at,
+                        principal_effect=Money(
+                            principal.amount - previous_principal.amount,
+                            self.currency,
+                        ),
+                        financial_charge_effect=Money(
+                            charges.amount - previous_charges.amount,
+                            self.currency,
+                        ),
+                        description=getattr(event, "description", None),
+                    )
+                )
         cycle = self.cycle_for(closing_date)
         if cycle.closing_date != closing_date:
             cycle = InvoiceCycle(
@@ -1132,6 +1249,7 @@ class CreditCard:
             financial_charges_due=charges,
             has_settlement=has_settlement,
             installments=tuple(installments),
+            components=tuple(components),
         )
 
     def invoices(self) -> tuple[Invoice, ...]:
@@ -1257,6 +1375,18 @@ class CreditCard:
             if isinstance(event, InstallmentPurchaseCorrected) and event.purchase_id == purchase_id:
                 description = event.description
         return description
+
+    def _purchase_version_recorded_at(self, purchase_id: UUID) -> datetime:
+        try:
+            purchase = self._purchase(purchase_id)
+        except LookupError:
+            purchase = self._installment_purchase(purchase_id)
+        recorded_at = purchase.metadata.recorded_at
+        for event in self.history:
+            if isinstance(event, (InstallmentPurchaseCorrected, InvoiceAssignmentCorrected)):
+                if event.purchase_id == purchase_id:
+                    recorded_at = event.metadata.recorded_at
+        return recorded_at
 
     def _purchase_closing_date(self, purchase: CardPurchase) -> date:
         closing_date = purchase.invoice_closing_date

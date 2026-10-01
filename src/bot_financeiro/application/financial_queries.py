@@ -8,6 +8,19 @@ from types import TracebackType
 from typing import Protocol
 from uuid import UUID
 
+from bot_financeiro.application.financial_query_part3 import (
+    CommitmentKind as CommitmentKind,
+)
+from bot_financeiro.application.financial_query_part3 import (
+    CommitmentsProjector,
+    CommitmentsReport,
+    CreditCardPositionProjector,
+    CreditCardPositionView,
+    PayablesProjector,
+    PayablesReport,
+    RealizedCashFlowProjector,
+    RealizedCashFlowReport,
+)
 from bot_financeiro.domain.categories import (
     Allocation,
     CategoryCatalog,
@@ -15,6 +28,7 @@ from bot_financeiro.domain.categories import (
     FinancialCategory,
     FinancialNature,
 )
+from bot_financeiro.domain.credit_cards import CreditCard
 from bot_financeiro.domain.financial_changes import FinancialFactHistory
 from bot_financeiro.domain.money import Money
 from bot_financeiro.domain.movements import (
@@ -25,6 +39,8 @@ from bot_financeiro.domain.movements import (
     InvoicePayment,
     Transfer,
 )
+from bot_financeiro.domain.payables import Payable
+from bot_financeiro.domain.planning import PlannedOccurrence
 from bot_financeiro.domain.resource_account import (
     AccountHistoryEntryKind,
     ResourceAccount,
@@ -223,9 +239,19 @@ class FinancialQuerySource(Protocol):
 
     def get_current_financial_fact(self, fact_id: UUID): ...
 
+    def financial_fact_version_recorded_at(self, fact_id: UUID) -> datetime | None: ...
+
     def list_recognized_facts(self) -> tuple[RecognizedFactSnapshot, ...]: ...
 
     def list_expense_refunds(self) -> tuple[ExpenseRefundSnapshot, ...]: ...
+
+    def get_credit_card(self, card_id: UUID) -> CreditCard | None: ...
+
+    def list_payables(self) -> tuple[Payable, ...]: ...
+
+    def list_credit_cards(self) -> tuple[CreditCard, ...]: ...
+
+    def list_planned_occurrences(self, through_date: date) -> tuple[PlannedOccurrence, ...]: ...
 
 
 class FinancialQueries:
@@ -241,6 +267,87 @@ class FinancialQueries:
         source_factory: Callable[[], FinancialQuerySource],
     ) -> None:
         self._source_factory = source_factory
+        self._credit_card_positions = CreditCardPositionProjector()
+        self._payables = PayablesProjector()
+        self._commitments = CommitmentsProjector()
+        self._cash_flow = RealizedCashFlowProjector()
+
+    def credit_card_position(
+        self,
+        *,
+        card_id: UUID,
+        on_date: date,
+    ) -> CreditCardPositionView:
+        with self._source_factory() as source:
+            card = source.get_credit_card(card_id)
+            if card is None:
+                raise LookupError(f"credit card {card_id} does not exist")
+            return self._credit_card_positions.project(
+                card,
+                on_date=on_date,
+                version_recorded_at=lambda fact_id, fallback: self._resolved_recorded_at(
+                    source,
+                    fact_id,
+                    fallback,
+                ),
+            )
+
+    def payables_report(
+        self,
+        *,
+        on_date: date,
+        currency: str,
+    ) -> PayablesReport:
+        with self._source_factory() as source:
+            return self._payables.project(
+                source.list_payables(),
+                on_date=on_date,
+                currency=currency,
+                version_recorded_at=lambda fact_id, fallback: self._resolved_recorded_at(
+                    source,
+                    fact_id,
+                    fallback,
+                ),
+            )
+
+    def commitments_report(
+        self,
+        *,
+        as_of: date,
+        through_date: date,
+        currency: str,
+    ) -> CommitmentsReport:
+        with self._source_factory() as source:
+            return self._commitments.project(
+                cards=source.list_credit_cards(),
+                payables=source.list_payables(),
+                occurrences=source.list_planned_occurrences(through_date),
+                as_of=as_of,
+                through_date=through_date,
+                currency=currency,
+                version_recorded_at=lambda fact_id, fallback: self._resolved_recorded_at(
+                    source,
+                    fact_id,
+                    fallback,
+                ),
+            )
+
+    def realized_cash_flow(
+        self,
+        *,
+        period: QueryPeriod,
+        currency: str,
+        account_id: UUID | None = None,
+    ) -> RealizedCashFlowReport:
+        with self._source_factory() as source:
+            return self._cash_flow.project(
+                source.list_movement_histories(),
+                start_date=period.start_date,
+                end_date=period.end_date,
+                currency=currency,
+                account_id=account_id,
+                description_for=lambda movement: self._description(movement, source),
+            )
 
     def search_movements(
         self,
@@ -799,6 +906,15 @@ class FinancialQueries:
         if isinstance(movement, InvoicePayment):
             return FinancialRecordType.INVOICE_PAYMENT
         return FinancialRecordType.ACCOUNT_EXPENSE_REFUND
+
+    @staticmethod
+    def _resolved_recorded_at(
+        source: FinancialQuerySource,
+        fact_id: UUID,
+        fallback: datetime,
+    ) -> datetime:
+        persisted = source.financial_fact_version_recorded_at(fact_id)
+        return max(persisted or fallback, fallback)
 
     @staticmethod
     def _version_recorded_at(
